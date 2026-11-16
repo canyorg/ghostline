@@ -41,4 +41,19 @@ pub enum Error {
     /// Argon2 / HKDF failure (should never happen with valid params).
     #[error("key derivation failed")]
     Kdf,
+    /// AEAD authentication failed (wrong key or tampered ciphertext).
+    #[error("decryption failed")]
+    Decrypt,
+    /// Bytes could not be parsed as a protocol message.
+    #[error("malformed message")]
+    Malformed,
+    /// Payload exceeds the largest padding bucket.
+    #[error("message too large")]
+    TooLarge,
+    /// Ed25519 signature invalid.
+    #[error("invalid signature")]
+    BadSignature,
+    /// Message refers to a sender or key we do not have.
+    #[error("unknown sender or key")]
+    UnknownKey,
 }

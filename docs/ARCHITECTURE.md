@@ -38,47 +38,55 @@ delete_tok  = HKDF(master, "ghostline/v1/delete-token")
 
 The relay learns only `mailbox_id` and `SHA-256(delete_tok)`.
 
-## 2. Joining and sessions (M2)
+## 2. Joining and messaging (M2a, implemented — `crates/core/src/session.rs`)
+
+Every blob on the relay is `nonce ‖ XChaCha20-Poly1305(room_key, pad(Inner))`. The outer
+layer hides type, sender and size class from the relay. Inside are three signed messages:
+
+| Inner | Purpose |
+|---|---|
+| `Hello{member, dh, nick}` | announces a fresh **per-room** Ed25519 identity + X25519 key, self-signed |
+| `KeyDist{from, to, epoch, ct}` | sender's chain key, encrypted to one member with `HKDF(X25519(from,to))` |
+| `Msg{from, epoch, index, ct}` | content encrypted with the sender's ratchet message key |
 
 1. The joiner derives the secrets and fetches the mailbox.
-   Empty mailbox → "Room not found or wrong password". These two cases cannot be told apart.
-2. The joiner generates a fresh, **per-room** Signal identity key. There are no
-   long-term identities, so rooms cannot be linked to each other.
-3. The joiner posts a `JOIN` envelope encrypted with `room_key`
-   (XChaCha20-Poly1305): nickname, identity key and prekey bundle.
-4. Existing members set up pairwise Signal sessions with the joiner and send it their
-   current **Sender Key** over those sessions. Group messages use Sender Keys; the
-   pairwise sessions carry control messages and key rotation.
-5. When a member leaves or the room is re-keyed, everyone rotates their Sender Key.
-   New members never get old keys, so they cannot read history.
+   Empty/absent mailbox → "room not found or wrong password". The two are indistinguishable.
+2. The joiner posts `Hello`. Everyone who sees a new `Hello` sends that member a `KeyDist`
+   of their own **current** chain position; the joiner does the same for every `Hello` in history.
+3. Sending: `mk = HKDF(ck,"msg")`, `ck' = HKDF(ck,"next")`, old keys deleted (forward secrecy).
+   Receivers keep at most 4000 skipped keys for out-of-order delivery; replays are rejected.
+4. Newcomers get the chain at its current index → **cannot read history**.
+5. `Leave` → every remaining member starts a new epoch and re-distributes keys → the
+   leaver cannot read on.
+6. Every `Msg` is Ed25519-signed by the sender's room identity; a password holder can
+   neither read nor forge.
 
-`room_key` protects only the join handshake. Message content is protected by the
-ratchets, so a leaked password does not decrypt past traffic.
+`room_key` (from the password) only protects the outer layer and the act of joining.
 
-### Envelope format
+**Planned (M2b):** replace KeyDist with libsignal pairwise sessions (PQXDH + Double
+Ratchet) and rotate sender chains periodically, adding post-compromise security.
 
-```
-mailbox_id (32) ‖ msg_id (16, random) ‖ ciphertext (padded to 256/1k/4k/16k buckets)
-```
+### Content types (inside `Msg`)
 
-Sender, nickname, timestamp and type all live **inside** the ciphertext.
+`Text{id, text, ts}` · `Receipt{Delivered|Read, ids}` · `Leave` · `Burn`
 
 ### Delivery status
 
 | Mark | Meaning | How |
 |---|---|---|
-| ✓ | stored on relay | relay ACK on POST |
-| ✓✓ | delivered | encrypted `RECEIPT{delivered,msg_id}` from the recipient (for groups: from all members) |
-| ✓✓ (green, bright) | read | encrypted `RECEIPT{read,msg_id}`; off switch per user |
+| ⏳ | sending | – |
+| ✓ | stored on relay | relay 200 on POST |
+| ✓✓ | delivered | `Receipt{Delivered}` from **every** member present when it was sent |
+| ✓✓ (cyan) | read | `Receipt{Read}` from every member. Terminal client sends it on the next key press; `--no-read-receipts` disables |
 
-## 3. Relay (M3)
+## 3. Relay (M3, implemented — `crates/relay`)
 
 - Hosted only as a v3 onion service. It has no clearnet listener.
 - API: `PUT /mb/{id}` (create, with `delete_hash`), `POST /mb/{id}`, `GET /mb/{id}?since=`,
   `DELETE /mb/{id}` with header `X-Delete-Token`. The relay checks
   `SHA-256(token) == delete_hash` and drops everything immediately.
-- Storage: an in-memory map by default. Optionally an encrypted on-disk store with a
-  TTL (default 7 days) and coarse hour buckets instead of timestamps.
+- Storage: RAM only. Idle rooms expire after a TTL (default 7 days). A restart wipes everything.
+- Burned mailbox ids are kept as tombstones (hash only) so a burned room cannot be re-created.
 - Logging: compiled out. No request logs and no access logs. There are no IPs or user
   agents to log anyway, because traffic arrives over Tor and the client sends no UA header.
 - Anyone can run their own relay. The relay address is part of the room invite (optional

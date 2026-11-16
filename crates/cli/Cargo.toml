@@ -1,0 +1,26 @@
+[package]
+name = "ghostline"
+description = "GhostLine terminal client — anonymous E2E-encrypted chat over Tor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "ghostline"
+path = "src/main.rs"
+
+[dependencies]
+ghostline-core = { path = "../core" }
+tokio.workspace = true
+hex.workspace = true
+zeroize.workspace = true
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks"] }
+ratatui = "0.29"
+rpassword = "7"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+unicode-width = "0.2"
+url = "2"

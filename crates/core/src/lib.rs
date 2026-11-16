@@ -8,22 +8,30 @@
 //! - [`nickname`] — nickname validation (anti-spoofing: no bidi/zero-width chars)
 //! - [`kdf`]      — Argon2id + HKDF derivation of room key, mailbox id and delete token
 //!
-//! Later milestones add Signal Protocol sessions (libsignal), the Tor transport
-//! (Arti) and the encrypted local store. See `docs/ARCHITECTURE.md`.
+//! Milestone M2 (v0):
+//! - [`crypto`]  — XChaCha20-Poly1305, HKDF, size padding
+//! - [`proto`]   — wire format, Ed25519-signed envelopes
+//! - [`session`] — sans-IO room state machine: Sender-Keys ratchet, receipts, re-key, burn
+//!
+//! See `docs/ARCHITECTURE.md`.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod crypto;
 pub mod error;
 pub mod kdf;
 pub mod nickname;
 pub mod password;
+pub mod proto;
 pub mod room_id;
+pub mod session;
 
 pub use error::Error;
 pub use kdf::{KdfParams, RoomSecrets};
 pub use nickname::Nickname;
 pub use room_id::RoomId;
+pub use session::{Event, Session, Status};
 
 use zeroize::Zeroizing;
 

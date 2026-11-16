@@ -1,6 +1,6 @@
 [package]
 name = "ghostline-relay"
-description = "GhostLine relay: onion-only store-and-forward for encrypted blobs. Sees no IPs, no user agents, no nicknames."
+description = "GhostLine relay: store-and-forward for encrypted blobs. Sees no IPs (onion), no user agents, no nicknames. Logs nothing."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,3 +8,9 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+tokio.workspace = true
+hex.workspace = true
+sha2.workspace = true
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "query"] }
+serde = { workspace = true }
+clap = { version = "4", features = ["derive"] }
