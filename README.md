@@ -21,6 +21,8 @@ You get a room number and a password, you pick a nickname, you talk, you burn th
 > independently. Do not rely on it where your safety depends on it until an audit is done.
 > See [Known limitations](#known-limitations).
 
+<p align="center"><img src="docs/img/chat.png" alt="GhostLine desktop app" width="820"></p>
+
 ---
 
 ## Why GhostLine? Zero trust
@@ -77,11 +79,12 @@ your IP from the relay. Mullvad adds a layer against your ISP and local network.
 | 🔑 **Room password** | Set your own, or get one generated automatically. **"Suggest password"** produces 16+ random characters (~123 bits by default). The ID and password never change. |
 | 🏷️ **Nickname per room** | Chosen when you enter a room, shown as `nick#fingerprint`. Unicode is allowed; invisible and bidi spoofing characters are blocked. |
 | ✓✓ **Delivery status** | ⏳ sending · ✓ on relay · ✓✓ delivered to everyone · **cyan ✓✓** read by everyone. Receipts are encrypted and read receipts can be turned off. |
-| 🚫 **Screenshot protection** | Desktop app (Windows): the window is excluded from screen capture. The terminal client cannot do this; see limitations. |
+| 🚫 **Screenshot protection** | Desktop app on Windows: the window is excluded from screenshots, recordings and screen sharing. Linux and the terminal client cannot do this; see limitations. |
 | 💥 **Burn room** | `/burn`: the relay deletes the mailbox instantly (and tombstones it), and every member's client wipes its keys. |
-| 🟩 **Hacker UI** | Green-on-black terminal client for Linux and Windows today. A matrix-style desktop app (GUI) comes next. |
+| 🟩 **Hacker UI** | **Desktop app** (Linux + Windows) with matrix rain, chat bubbles and hold-to-burn, in English, Turkish and Russian. Plus a green-on-black **terminal client**. Both talk to each other. |
+| 🧱 **No web engine** | The desktop app is pure Rust (egui): no WebView, no JavaScript, no HTML. Message text is only ever drawn as plain text, and nothing is written to disk. |
 
-## Quick start (terminal client)
+## Quick start
 
 You need [Rust](https://rustup.rs). It works on Linux (Fedora, Debian, Arch…), Windows 10/11
 (PowerShell, Windows Terminal) and macOS.
@@ -91,9 +94,35 @@ git clone https://github.com/canyorg/ghostline && cd ghostline
 cargo build --release
 ```
 
-The binaries end up in `target/release/` (`ghostline`, `ghostline-relay`; `.exe` on Windows).
+The binaries end up in `target/release/` (`.exe` on Windows):
 
-### Try it locally (3 terminals)
+| Binary | What it is |
+|---|---|
+| `ghostline-gui` | desktop app |
+| `ghostline` | terminal client |
+| `ghostline-relay` | relay server |
+
+### Desktop app
+
+```bash
+./target/release/ghostline-relay &        # for a local test; use an .onion relay for real
+./target/release/ghostline-gui
+```
+
+**CREATE CHAT** → nickname → password (generated automatically, or your own; **Suggest password**
+gives a new one) → you get the room ID + password with copy buttons → **Enter room**.
+**JOIN ROOM** → room ID (typos are caught as you type) → password → nickname.
+
+In the room: 👥 members, room info (ID + password to share again), **Leave**, and
+**🔥 BURN ROOM**: hold it for 1.5 s and the room is gone for everyone. Relay and Tor settings
+are under **Network** on the start screen. The language follows your system (EN/TR/RU) and
+can be switched there.
+
+<p align="center"><img src="docs/img/home.png" width="400"> <img src="docs/img/created.png" width="400"></p>
+
+### Terminal client
+
+Try it locally in 3 terminals:
 
 ```bash
 # terminal 1 — the relay (RAM only, logs nothing)
@@ -187,7 +216,7 @@ A security tool should be upfront about what it **cannot** do:
 - [x] **M3** Relay: RAM only, no logs, TTL, instant delete + tombstone
 - [x] **CLI** Terminal client for Linux and Windows, Tor via SOCKS
 - [x] **M6a** Burn room
-- [ ] **M5** Desktop app (Tauri 2, Linux + Windows): matrix UI, screen-capture exclusion
+- [x] **M5** Desktop app (Linux + Windows): matrix UI, bubbles, ✔/✔✔, hold-to-burn, screen-capture exclusion on Windows, EN/TR/RU
 - [ ] **M2b** `libsignal` (PQXDH + Double Ratchet)
 - [ ] **M4** Embedded Tor (Arti): circuit rotation, stream isolation, bridges
 - [ ] **M6b** Panic wipe, optional encrypted local history
@@ -207,8 +236,9 @@ cargo clippy --all-targets -- -D warnings
 ```
 crates/core    protocol core: IDs, KDF, crypto, wire format, sans-IO session
 crates/relay   relay server (RAM only, no logs)
+crates/client  shared runtime: relay transport (Tor/SOCKS), create/join, room driver
 crates/cli     terminal client `ghostline`
-app/           desktop app (Tauri 2) — coming next
+crates/gui     desktop app `ghostline-gui` (egui)
 docs/          architecture and threat model
 ```
 

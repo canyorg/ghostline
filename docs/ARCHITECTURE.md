@@ -3,8 +3,8 @@
 ## Components
 
 ```
-┌────────────────────────── Desktop client (Tauri 2) ──────────────────────────┐
-│  UI (HTML/CSS, matrix theme)  ⇄  ghostline-core (Rust)                        │
+┌──────────────────────── Desktop app (egui) / terminal client ─────────────────┐
+│  UI (matrix theme)  ⇄  ghostline-client  ⇄  ghostline-core (Rust)             │
 │                                   ├─ room_id / password / nickname / kdf      │
 │                                   ├─ signal   (libsignal sessions, sender keys)│
 │                                   ├─ store    (SQLCipher, per-room keys)       │
@@ -102,15 +102,21 @@ Ratchet) and rotate sender chains periodically, adding post-compromise security.
   compression (to avoid leaking information through compressed sizes).
 - Bridges and pluggable transports (obfs4, snowflake) are available in settings.
 
-## 5. Desktop app (M5)
+## 5. Desktop app (M5, implemented — `crates/gui`)
 
-- Tauri 2, so the Rust core runs in-process and the UI is HTML/CSS (matrix theme).
+- Pure Rust: egui/eframe with the glow (OpenGL) backend. There is no web view, no JS and no
+  HTML parser, so there is no XSS-style attack surface: message text is only drawn as text.
+- No persistence: the eframe `persistence` feature is off, so nothing is written to disk
+  (no settings, history or cache).
 - **Screen-capture exclusion:** on Windows, `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)`.
-  On Linux it is not enforceable, so the app shows a warning banner.
-- Local store: SQLCipher. Each room has its own key, which is wrapped by a device key.
-  Optionally an app PIN unlocks the device key, using Argon2id.
-- Screens: **Chat oluştur** (nickname, ID, auto password, *Şifre öner*), **Odaya katıl**,
-  chat view, **Odayı sil** (hold for 1.5 s, then it happens at once with no further confirmation).
+  Linux cannot enforce this, so the app shows a warning.
+- Screens: start (CREATE CHAT / JOIN ROOM, network settings, EN/TR/RU), create (nickname,
+  auto/own password, *suggest password*), credentials card with copy buttons, join (live
+  check-digit validation), chat (bubbles, ✔/✔✔/cyan ✔✔, members, info, leave,
+  hold-to-burn for 1.5 s).
+- Closing the window while in a room sends `Leave` first, so the others re-key.
+- Both front-ends share `crates/client` (transport + room driver), so the GUI and the
+  terminal client interoperate in the same room.
 
 ## 6. Burn room (M6)
 

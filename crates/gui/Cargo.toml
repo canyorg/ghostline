@@ -1,0 +1,28 @@
+[package]
+name = "ghostline-gui"
+description = "GhostLine desktop app — anonymous E2E-encrypted chat over Tor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "ghostline-gui"
+path = "src/main.rs"
+
+[dependencies]
+ghostline-core = { path = "../core" }
+ghostline-client = { path = "../client" }
+tokio.workspace = true
+zeroize.workspace = true
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "clipboard"] }
+raw-window-handle = "0.6"
+# bundle monochrome emoji fonts so ✔ ⏳ 🔒 🔥 render everywhere
+egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"] }
+rand.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

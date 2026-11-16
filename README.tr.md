@@ -21,6 +21,8 @@ Bir oda numarası ve parola alırsın, takma adını seçersin, konuşursun, iş
 > olarak incelenmedi. Bir denetim yapılana kadar can güvenliğinin bağlı olduğu durumlarda
 > tek başına güvenme. [Bilinen sınırlamalar](#bilinen-sınırlamalar) bölümüne bak.
 
+<p align="center"><img src="docs/img/chat.png" alt="GhostLine masaüstü uygulaması" width="820"></p>
+
 ---
 
 ## Neden GhostLine? Zero trust (sıfır güven)
@@ -77,11 +79,12 @@ gizliyor. Mullvad, ISP'ye ve yerel ağa karşı ek bir katman sağlar.
 | 🔑 **Oda parolası** | Kendi parolanı belirleyebilir ya da otomatik ürettirebilirsin. **"Şifre öner"** 16 karakterden uzun rastgele bir parola üretir (varsayılan ~123 bit). ID ve parola hiç değişmez. |
 | 🏷️ **Odaya özel takma ad** | Odaya girerken seçilir, `takma_ad#parmakizi` olarak görünür. Unicode serbest; görünmez karakterler ve yazı yönünü değiştiren taklit karakterleri engellenir. |
 | ✓✓ **İletim durumu** | ⏳ gönderiliyor · ✓ relay'de · ✓✓ herkese ulaştı · **cyan ✓✓** herkes okudu. Bilgilendirmeler şifreli gider, okundu bilgisi kapatılabilir. |
-| 🚫 **Ekran görüntüsü koruması** | Masaüstü uygulaması (Windows): pencere ekran yakalamada görünmez. Terminal istemcisi bunu yapamaz, sınırlamalara bak. |
+| 🚫 **Ekran görüntüsü koruması** | Windows'ta masaüstü uygulaması ekran görüntüsünde, ekran kaydında ve ekran paylaşımında görünmez. Linux'ta ve terminal istemcisinde bu mümkün değil, sınırlamalara bak. |
 | 💥 **Odayı yak** | `/burn`: relay posta kutusunu anında siler (bir daha oluşturulamaz) ve tüm üyelerin istemcileri anahtarları siler. |
-| 🟩 **Hacker arayüzü** | Bugün Linux ve Windows için siyah üzerine yeşil terminal istemcisi var. Matrix tarzı masaüstü uygulaması (GUI) sırada. |
+| 🟩 **Hacker arayüzü** | Matrix yağmurlu, mesaj balonlu, basılı tutunca silen **masaüstü uygulaması** (Linux + Windows). Türkçe, İngilizce ve Rusça. Yanında siyah üzerine yeşil **terminal istemcisi** de var ve ikisi birbiriyle konuşabiliyor. |
+| 🧱 **Web motoru yok** | Masaüstü uygulaması saf Rust (egui): WebView, JavaScript ve HTML yok. Mesajlar her zaman düz metin olarak çizilir, diske hiçbir şey yazılmaz. |
 
-## Hızlı başlangıç (terminal istemcisi)
+## Hızlı başlangıç
 
 [Rust](https://rustup.rs) gerekir. Linux'ta (Fedora, Debian, Arch…), Windows 10/11'de
 (PowerShell, Windows Terminal) ve macOS'te çalışır.
@@ -91,10 +94,35 @@ git clone https://github.com/canyorg/ghostline && cd ghostline
 cargo build --release
 ```
 
-Çalıştırılabilir dosyalar `target/release/` klasörüne çıkar (`ghostline`, `ghostline-relay`;
-Windows'ta sonlarında `.exe` olur).
+Çalıştırılabilir dosyalar `target/release/` klasörüne çıkar (Windows'ta sonlarında `.exe` olur):
 
-### Yerelde dene (3 terminal)
+| Dosya | Ne işe yarar |
+|---|---|
+| `ghostline-gui` | masaüstü uygulaması |
+| `ghostline` | terminal istemcisi |
+| `ghostline-relay` | relay sunucusu |
+
+### Masaüstü uygulaması
+
+```bash
+./target/release/ghostline-relay &        # yerel test için; gerçek kullanımda .onion relay
+./target/release/ghostline-gui
+```
+
+**CHAT OLUŞTUR** → takma ad → parola (otomatik üretilir ya da kendin belirlersin; **Şifre öner**
+yenisini verir) → oda ID'si ve parola kopyalama butonlarıyla gösterilir → **Odaya gir**.
+**ODAYA KATIL** → oda ID'si (yazım hataları yazarken yakalanır) → parola → takma ad.
+
+Oda içinde: 👥 üyeler, oda bilgisi (ID ve parolayı tekrar paylaşmak için), **Çık** ve
+**🔥 ODAYI SİL**: 1,5 saniye basılı tutunca oda herkes için anında yok olur. Relay ve Tor ayarları
+başlangıç ekranındaki **Ağ** bölümünde. Dil sistem dilini takip eder (TR/EN/RU), aynı ekrandan
+değiştirilebilir.
+
+<p align="center"><img src="docs/img/home.png" width="400"> <img src="docs/img/created.png" width="400"></p>
+
+### Terminal istemcisi
+
+3 terminalde yerel deneme:
 
 ```bash
 # terminal 1 — relay (sadece RAM'de çalışır, hiçbir şey loglamaz)
@@ -188,7 +216,7 @@ Bir güvenlik aracı neyi **yapamadığını** açıkça söylemeli:
 - [x] **M3** Relay: sadece RAM, log yok, TTL, anında silme ve kalıcı silinme kaydı (tombstone)
 - [x] **CLI** Linux ve Windows terminal istemcisi, SOCKS ile Tor
 - [x] **M6a** Odayı yakma
-- [ ] **M5** Masaüstü uygulaması (Tauri 2, Linux + Windows): matrix arayüzü, ekran yakalama engeli
+- [x] **M5** Masaüstü uygulaması (Linux + Windows): matrix arayüzü, balonlar, ✔/✔✔, basılı tutarak silme, Windows'ta ekran yakalama engeli, TR/EN/RU
 - [ ] **M2b** `libsignal` (PQXDH + Double Ratchet)
 - [ ] **M4** Gömülü Tor (Arti): devre değişimi, akış izolasyonu, köprüler
 - [ ] **M6b** Panik silme, isteğe bağlı şifreli yerel geçmiş
@@ -208,8 +236,9 @@ cargo clippy --all-targets -- -D warnings
 ```
 crates/core    protokol çekirdeği: ID, KDF, kripto, mesaj formatı, oturum
 crates/relay   relay sunucusu (sadece RAM, log yok)
+crates/client  ortak katman: relay bağlantısı (Tor/SOCKS), oluştur/katıl, oda sürücüsü
 crates/cli     terminal istemcisi `ghostline`
-app/           masaüstü uygulaması (Tauri 2) — sırada
+crates/gui     masaüstü uygulaması `ghostline-gui` (egui)
 docs/          mimari ve tehdit modeli
 ```
 

@@ -2,39 +2,24 @@
 //! Windows Terminal / PowerShell).
 
 use std::collections::HashMap;
-use std::sync::mpsc as std_mpsc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{Local, TimeZone};
+use ghostline_client::{Room, RoomEvent};
 use ghostline_core::proto::MsgId;
-use ghostline_core::{Event, RoomId, Session, Status};
+use ghostline_core::{Event, Status};
 use ratatui::crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 use ratatui::Frame;
-use tokio::sync::mpsc as tk_mpsc;
 use unicode_width::UnicodeWidthChar;
-use zeroize::Zeroizing;
-
-use crate::net::{Fetch, Post, Relay};
 
 const GREEN: Color = Color::Green;
 const BRIGHT: Color = Color::LightGreen;
 const DIM: Color = Color::DarkGray;
-
-/// What the room needs besides the session.
-pub struct RoomInfo {
-    pub id: RoomId,
-    pub password: Zeroizing<String>,
-    pub route_label: String,
-    pub delete_token: Zeroizing<[u8; 32]>,
-    pub poll_interval: Duration,
-    pub read_receipts: bool,
-}
 
 /// How the chat ended.
 pub enum Exit {
@@ -42,119 +27,6 @@ pub enum Exit {
     BurnedByMe,
     BurnedBy(String),
     Vanished,
-}
-
-#[derive(Clone, Copy)]
-enum PostTag {
-    Msg(MsgId),
-    Leave,
-    Other,
-}
-
-enum NetCmd {
-    Post(Vec<u8>, PostTag),
-    Burn(Zeroizing<[u8; 32]>),
-}
-
-enum NetEvent {
-    Blobs(Vec<Vec<u8>>),
-    Posted(PostTag),
-    Vanished,
-    BurnDone,
-    Error(String),
-    Online,
-}
-
-fn spawn_network(
-    rt: &tokio::runtime::Runtime,
-    relay: Arc<Relay>,
-    poll: Duration,
-) -> (
-    tk_mpsc::UnboundedSender<NetCmd>,
-    std_mpsc::Receiver<NetEvent>,
-) {
-    let (cmd_tx, mut cmd_rx) = tk_mpsc::unbounded_channel::<NetCmd>();
-    let (ev_tx, ev_rx) = std_mpsc::channel::<NetEvent>();
-
-    // Poller: fetch new blobs in order.
-    let (r, tx) = (relay.clone(), ev_tx.clone());
-    rt.spawn(async move {
-        let mut since = 0u64;
-        let mut failing = false;
-        loop {
-            match r.fetch(since).await {
-                Ok(Fetch::Blobs(v)) => {
-                    if failing {
-                        failing = false;
-                        let _ = tx.send(NetEvent::Online);
-                    }
-                    let more = v.len() >= 256;
-                    if let Some((last, _)) = v.last() {
-                        since = last + 1;
-                    }
-                    if !v.is_empty()
-                        && tx
-                            .send(NetEvent::Blobs(v.into_iter().map(|(_, b)| b).collect()))
-                            .is_err()
-                    {
-                        return;
-                    }
-                    if more {
-                        continue;
-                    }
-                }
-                Ok(Fetch::NotFound) | Ok(Fetch::Gone) => {
-                    let _ = tx.send(NetEvent::Vanished);
-                    return;
-                }
-                Err(e) => {
-                    failing = true;
-                    if tx.send(NetEvent::Error(e.to_string())).is_err() {
-                        return;
-                    }
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                }
-            }
-            tokio::time::sleep(poll).await;
-        }
-    });
-
-    // Sender: posts strictly in order.
-    rt.spawn(async move {
-        while let Some(cmd) = cmd_rx.recv().await {
-            match cmd {
-                NetCmd::Post(blob, tag) => {
-                    let mut tries = 0;
-                    loop {
-                        match relay.post(blob.clone()).await {
-                            Ok(Post::Ok) => {
-                                let _ = ev_tx.send(NetEvent::Posted(tag));
-                                break;
-                            }
-                            Ok(Post::NotFound) | Ok(Post::Gone) => {
-                                let _ = ev_tx.send(NetEvent::Vanished);
-                                break;
-                            }
-                            Err(e) => {
-                                tries += 1;
-                                let _ = ev_tx.send(NetEvent::Error(e.to_string()));
-                                if tries >= 5 {
-                                    break;
-                                }
-                                tokio::time::sleep(Duration::from_secs(2)).await;
-                            }
-                        }
-                    }
-                }
-                NetCmd::Burn(token) => {
-                    let _ = relay.burn(&token).await;
-                    let _ = ev_tx.send(NetEvent::BurnDone);
-                }
-            }
-        }
-    });
-
-    (cmd_tx, ev_rx)
 }
 
 enum Entry {
@@ -185,7 +57,6 @@ struct Ui {
     route: String,
     members: usize,
     conn_error: Option<String>,
-    unread: Vec<MsgId>,
     mode: Mode,
 }
 
@@ -215,25 +86,17 @@ const BANNER: &[&str] = &[
 ];
 
 /// Run the chat until the user quits or the room is burned.
-pub fn run(
-    rt: &tokio::runtime::Runtime,
-    relay: Arc<Relay>,
-    mut session: Session,
-    info: RoomInfo,
-) -> Result<Exit> {
-    let (net, events) = spawn_network(rt, relay, info.poll_interval);
-
+pub fn run(mut room: Room) -> Result<Exit> {
     let mut ui = Ui {
         entries: Vec::new(),
         statuses: HashMap::new(),
         input: String::new(),
         scroll: 0,
-        me: session.me_display(),
-        room: info.id.display_grouped(),
-        route: info.route_label.clone(),
+        me: room.me(),
+        room: room.id.display_grouped(),
+        route: room.route_label.clone(),
         members: 0,
         conn_error: None,
-        unread: Vec::new(),
         mode: Mode::Chat,
     };
     for l in BANNER {
@@ -251,40 +114,15 @@ pub fn run(
     let mut terminal = ratatui::init();
     let result = (|| -> Result<Exit> {
         loop {
-            // 1) Network events.
-            while let Ok(ev) = events.try_recv() {
+            // 1) Network / protocol events.
+            for ev in room.poll() {
                 match ev {
-                    NetEvent::Blobs(blobs) => {
-                        for b in blobs {
-                            let (evs, out) = session.handle_blob(&b);
-                            for o in out {
-                                let _ = net.send(NetCmd::Post(o, PostTag::Other));
-                            }
-                            for e in evs {
-                                apply_event(&mut ui, e);
-                            }
-                        }
-                        if let Some(r) = session.take_delivered_receipt() {
-                            let _ = net.send(NetCmd::Post(r, PostTag::Other));
-                        }
-                        ui.members = session.members().len();
-                    }
-                    NetEvent::Posted(PostTag::Msg(id)) => {
-                        if let Some(e) = session.mark_sent(&id) {
-                            apply_event(&mut ui, e);
-                        }
-                    }
-                    NetEvent::Posted(PostTag::Leave) => {
-                        if matches!(ui.mode, Mode::Leaving(_)) {
-                            return Ok(Exit::Quit);
-                        }
-                    }
-                    NetEvent::Posted(PostTag::Other) => {}
-                    NetEvent::BurnDone => return Ok(Exit::BurnedByMe),
-                    NetEvent::Vanished => {
-                        if matches!(ui.mode, Mode::Burning(_)) {
-                            return Ok(Exit::BurnedByMe);
-                        }
+                    RoomEvent::Core(e) => apply_event(&mut ui, e),
+                    RoomEvent::ConnError(e) => ui.conn_error = Some(e),
+                    RoomEvent::Online => ui.conn_error = None,
+                    RoomEvent::LeftDone => return Ok(Exit::Quit),
+                    RoomEvent::BurnDone => return Ok(Exit::BurnedByMe),
+                    RoomEvent::Vanished => {
                         if !matches!(ui.mode, Mode::Ending(..)) {
                             ui.alert(
                                 "> 🔥 ROOM BURNED — deleted from relay, wiping keys",
@@ -293,10 +131,9 @@ pub fn run(
                             ui.mode = Mode::Ending(Instant::now(), Exit::Vanished);
                         }
                     }
-                    NetEvent::Error(e) => ui.conn_error = Some(e),
-                    NetEvent::Online => ui.conn_error = None,
                 }
             }
+            ui.members = room.members().len();
 
             // 2) Timeouts for leaving / burning / ending.
             match &ui.mode {
@@ -326,20 +163,13 @@ pub fn run(
                 continue; // Windows reports press + release
             }
             // Any key press = the user is looking: send read receipts.
-            if info.read_receipts && !ui.unread.is_empty() {
-                let ids = std::mem::take(&mut ui.unread);
-                if let Some(r) = session.read_receipt(ids) {
-                    let _ = net.send(NetCmd::Post(r, PostTag::Other));
-                }
-            }
+            room.mark_read();
             if !matches!(ui.mode, Mode::Chat) {
                 continue;
             }
             let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
             match k.code {
-                KeyCode::Char('c') | KeyCode::Char('d') if ctrl => {
-                    start_leave(&mut ui, &mut session, &net);
-                }
+                KeyCode::Char('c') | KeyCode::Char('d') if ctrl => start_leave(&mut ui, &mut room),
                 KeyCode::Char('u') if ctrl => ui.input.clear(),
                 KeyCode::Char(c) => {
                     if ui.input.chars().count() < ghostline_core::session::MAX_TEXT_CHARS {
@@ -366,10 +196,10 @@ pub fn run(
                     }
                     ui.scroll = 0;
                     if let Some(cmd) = line.strip_prefix('/') {
-                        command(cmd, &mut ui, &mut session, &net, &info);
+                        command(cmd, &mut ui, &mut room);
                     } else {
-                        match session.send_text(line) {
-                            Ok((id, blob)) => {
+                        match room.send_text(line) {
+                            Ok(id) => {
                                 ui.statuses.insert(id, Status::Pending);
                                 ui.entries.push(Entry::Msg {
                                     id: Some(id),
@@ -378,7 +208,6 @@ pub fn run(
                                     text: line.to_string(),
                                     mine: true,
                                 });
-                                let _ = net.send(NetCmd::Post(blob, PostTag::Msg(id)));
                             }
                             Err(e) => ui.alert(format!("> not sent: {e}"), Color::Red),
                         }
@@ -392,21 +221,13 @@ pub fn run(
     result
 }
 
-fn start_leave(ui: &mut Ui, session: &mut Session, net: &tk_mpsc::UnboundedSender<NetCmd>) {
+fn start_leave(ui: &mut Ui, room: &mut Room) {
     ui.sys("> leaving room…");
-    if let Ok(b) = session.leave_blob() {
-        let _ = net.send(NetCmd::Post(b, PostTag::Leave));
-    }
+    room.leave();
     ui.mode = Mode::Leaving(Instant::now());
 }
 
-fn command(
-    cmd: &str,
-    ui: &mut Ui,
-    session: &mut Session,
-    net: &tk_mpsc::UnboundedSender<NetCmd>,
-    info: &RoomInfo,
-) {
+fn command(cmd: &str, ui: &mut Ui, room: &mut Room) {
     match cmd.split_whitespace().next().unwrap_or("") {
         "help" | "h" | "?" => {
             ui.sys("> /who     list members");
@@ -418,7 +239,7 @@ fn command(
             ui.sys("> ✓ on relay · ✓✓ delivered to all · ✓✓ (cyan) read by all");
         }
         "who" => {
-            let m = session.members();
+            let m = room.members();
             ui.sys(format!("> {} (you)", ui.me));
             if m.is_empty() {
                 ui.sys("> nobody else here yet");
@@ -428,21 +249,18 @@ fn command(
             }
         }
         "info" => {
-            ui.sys(format!("> room id : {}", info.id.display_grouped()));
-            ui.sys(format!("> password: {}", info.password.as_str()));
+            ui.sys(format!("> room id : {}", room.id.display_grouped()));
+            ui.sys(format!("> password: {}", room.password.as_str()));
             ui.alert("> share both only over a channel you trust", Color::Yellow);
         }
         "clear" => ui.entries.clear(),
-        "quit" | "exit" | "q" => start_leave(ui, session, net),
+        "quit" | "exit" | "q" => start_leave(ui, room),
         "burn" => {
             ui.alert(
                 "> 🔥 BURNING ROOM — deleting from relay, wiping keys",
                 Color::Red,
             );
-            if let Ok(b) = session.burn_blob() {
-                let _ = net.send(NetCmd::Post(b, PostTag::Other));
-            }
-            let _ = net.send(NetCmd::Burn(info.delete_token.clone()));
+            room.burn();
             ui.mode = Mode::Burning(Instant::now());
         }
         other => ui.alert(
@@ -456,8 +274,7 @@ fn apply_event(ui: &mut Ui, e: Event) {
     match e {
         Event::Joined { who } => ui.sys(format!("> {who} joined")),
         Event::Left { who } => ui.sys(format!("> {who} left — keys rotated")),
-        Event::Message { id, from, text, ts } => {
-            ui.unread.push(id);
+        Event::Message { from, text, ts, .. } => {
             ui.entries.push(Entry::Msg {
                 id: None,
                 ts,

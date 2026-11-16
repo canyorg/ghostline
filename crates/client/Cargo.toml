@@ -1,0 +1,17 @@
+[package]
+name = "ghostline-client"
+description = "GhostLine client runtime: relay transport (Tor/SOCKS) and room driver shared by the terminal and desktop apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ghostline-core = { path = "../core" }
+tokio.workspace = true
+hex.workspace = true
+zeroize.workspace = true
+anyhow = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks"] }
+url = "2"

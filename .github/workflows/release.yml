@@ -30,10 +30,12 @@ jobs:
           mkdir dist
           cp target/${{ matrix.target }}/release/ghostline${{ matrix.ext }} dist/
           cp target/${{ matrix.target }}/release/ghostline-relay${{ matrix.ext }} dist/
-          cd dist && sha256sum * > SHA256SUMS-${{ matrix.target }}.txt
-          for f in ghostline${{ matrix.ext }} ghostline-relay${{ matrix.ext }}; do
+          cp target/${{ matrix.target }}/release/ghostline-gui${{ matrix.ext }} dist/
+          cd dist
+          for f in ghostline${{ matrix.ext }} ghostline-relay${{ matrix.ext }} ghostline-gui${{ matrix.ext }}; do
             mv "$f" "${f%.exe}-${{ matrix.target }}${{ matrix.ext }}"
           done
+          sha256sum * > SHA256SUMS-${{ matrix.target }}.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

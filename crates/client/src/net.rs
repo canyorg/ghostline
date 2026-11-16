@@ -18,6 +18,7 @@ pub enum Route {
 }
 
 impl Route {
+    /// Short human label, e.g. "tor 127.0.0.1:9050".
     pub fn label(&self) -> String {
         match self {
             Route::Direct => "direct".into(),

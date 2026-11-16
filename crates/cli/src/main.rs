@@ -6,19 +6,17 @@
 //! ghostline suggest-password           # just print a strong password
 //! ```
 
-mod net;
 mod ui;
 
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
-use ghostline_core::{password, KdfParams, Nickname, RoomCredentials, RoomId, Session};
+use ghostline_client::{setup, NetConfig, Prepared, Room};
+use ghostline_core::{password, Nickname, RoomId};
 use zeroize::Zeroizing;
-
-use net::{Fetch, Relay, Route};
 
 #[derive(Parser)]
 #[command(
@@ -114,14 +112,6 @@ fn enable_ansi() {
     let _ = ratatui::crossterm::execute!(io::stdout(), ratatui::crossterm::style::ResetColor);
 }
 
-fn derive(creds: &RoomCredentials) -> Result<ghostline_core::RoomSecrets> {
-    print!("{}", green("> deriving keys (argon2id, 128 MiB)… "));
-    io::stdout().flush()?;
-    let s = creds.derive(&KdfParams::DESKTOP)?;
-    println!("{}", green("ok"));
-    Ok(s)
-}
-
 fn runtime() -> Result<tokio::runtime::Runtime> {
     Ok(tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -129,12 +119,31 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
         .build()?)
 }
 
-fn route_for(n: &NetArgs) -> Result<Route> {
-    net::choose_route(&n.relay, n.tor, n.tor_port, n.proxy.as_deref(), n.no_tor)
+impl NetArgs {
+    fn config(&self) -> NetConfig {
+        NetConfig {
+            relay: self.relay.clone(),
+            tor: self.tor,
+            tor_port: self.tor_port,
+            proxy: self.proxy.clone(),
+            no_tor: self.no_tor,
+        }
+    }
+}
+
+fn working(cfg: &NetConfig) -> Result<()> {
+    let route = cfg.route()?;
+    println!("{}", green("> deriving keys (argon2id, 128 MiB)…"));
+    println!(
+        "{}",
+        green(&format!("> contacting relay via {}…", route.label()))
+    );
+    Ok(())
 }
 
 fn create(nick: Option<String>, n: NetArgs) -> Result<()> {
-    let route = route_for(&n)?;
+    let cfg = n.config();
+    cfg.route()?;
     let nick = ask_nick(nick)?;
     let pw = Zeroizing::new(rpassword::prompt_password(
         "password (Enter = generate a strong one, or type ≥12 chars): ",
@@ -151,21 +160,8 @@ fn create(nick: Option<String>, n: NetArgs) -> Result<()> {
     };
 
     let rt = runtime()?;
-    let (creds, secrets, relay) = loop {
-        let creds = RoomCredentials::new_room(user_pw)?;
-        let secrets = derive(&creds)?;
-        let relay = Relay::new(&n.relay, &route, &secrets.mailbox_id)?;
-        println!(
-            "{}",
-            green(&format!("> contacting relay via {}…", route.label()))
-        );
-        let created = rt
-            .block_on(relay.create(&secrets.delete_token_hash()))
-            .context("could not reach the relay — is ghostline-relay running? (or Tor?)")?;
-        if created {
-            break (creds, secrets, relay);
-        }
-    };
+    working(&cfg)?;
+    let prepared = setup::create_room(rt.handle(), &cfg, user_pw)?;
 
     println!();
     println!(
@@ -180,95 +176,45 @@ fn create(nick: Option<String>, n: NetArgs) -> Result<()> {
         "{}",
         green("╚══════════════════════════════════════════════════════════╝")
     );
-    println!("  room id : {}", green(&creds.id.display_grouped()));
-    println!("  password: {}", green(creds.password.as_str()));
+    println!("  room id : {}", green(&prepared.id.display_grouped()));
+    println!("  password: {}", green(prepared.password.as_str()));
     println!();
     println!(
         "  join with:  ghostline join {}",
-        creds.id.display_grouped()
+        prepared.id.display_grouped()
     );
     println!();
     prompt(&green("press Enter to open the room… "))?;
 
-    enter(
-        rt,
-        relay,
-        creds.id.clone(),
-        creds.password.clone(),
-        secrets,
-        nick,
-        route,
-        &n,
-    )
+    enter(rt, prepared, nick, &n)
 }
 
 fn join(id: Vec<String>, nick: Option<String>, n: NetArgs) -> Result<()> {
-    let route = route_for(&n)?;
+    let cfg = n.config();
+    cfg.route()?;
     let id = RoomId::parse(&id.join(" ")).map_err(|e| anyhow::anyhow!("room id: {e}"))?;
     let pw = Zeroizing::new(rpassword::prompt_password("password: ")?);
     let nick = ask_nick(nick)?;
-    let creds = RoomCredentials {
-        id: id.clone(),
-        password: pw,
-    };
-    let secrets = derive(&creds)?;
     let rt = runtime()?;
-    let relay = Relay::new(&n.relay, &route, &secrets.mailbox_id)?;
-    println!(
-        "{}",
-        green(&format!("> contacting relay via {}…", route.label()))
-    );
-    match rt
-        .block_on(relay.fetch(u64::MAX))
-        .context("could not reach the relay — is it running? (or Tor?)")?
-    {
-        Fetch::Blobs(_) => {}
-        Fetch::NotFound => {
-            bail!("room not found — or wrong password (these look identical on purpose)")
-        }
-        Fetch::Gone => bail!("this room has been burned"),
-    }
-    enter(
-        rt,
-        relay,
-        id,
-        creds.password.clone(),
-        secrets,
-        nick,
-        route,
-        &n,
-    )
+    working(&cfg)?;
+    let prepared = setup::join_room(rt.handle(), &cfg, id, pw)?;
+    enter(rt, prepared, nick, &n)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn enter(
     rt: tokio::runtime::Runtime,
-    relay: Relay,
-    id: RoomId,
-    password: Zeroizing<String>,
-    secrets: ghostline_core::RoomSecrets,
+    prepared: Prepared,
     nick: Nickname,
-    route: Route,
     n: &NetArgs,
 ) -> Result<()> {
-    let session = Session::new(nick, &secrets);
-    let relay = Arc::new(relay);
-    rt.block_on(relay.post(session.hello_blob()?))?;
-
-    let info = ui::RoomInfo {
-        id,
-        password,
-        route_label: route.label(),
-        delete_token: Zeroizing::new(secrets.delete_token),
-        poll_interval: match route {
-            Route::Direct => Duration::from_millis(700),
-            Route::Socks(_) => Duration::from_millis(1500),
-        },
-        read_receipts: !n.no_read_receipts,
-    };
-    drop(secrets); // zeroized on drop
-
-    let exit = ui::run(&rt, relay, session, info)?;
+    let room = Room::enter(
+        rt.handle(),
+        prepared,
+        nick,
+        !n.no_read_receipts,
+        Arc::new(|| {}),
+    )?;
+    let exit = ui::run(room)?;
     rt.shutdown_timeout(Duration::from_millis(500));
     match exit {
         ui::Exit::Quit => println!("{}", green("> left the room. keys wiped from memory.")),
