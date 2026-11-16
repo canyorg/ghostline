@@ -1,20 +1,22 @@
-//! UI strings in English, Turkish and Russian.
+//! UI strings in English, Turkish, Russian and German.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
     En,
     Tr,
     Ru,
+    De,
 }
 
 impl Lang {
-    pub const ALL: [Lang; 3] = [Lang::En, Lang::Tr, Lang::Ru];
+    pub const ALL: [Lang; 4] = [Lang::En, Lang::Tr, Lang::Ru, Lang::De];
 
     pub fn label(self) -> &'static str {
         match self {
             Lang::En => "EN",
             Lang::Tr => "TR",
             Lang::Ru => "RU",
+            Lang::De => "DE",
         }
     }
 
@@ -29,6 +31,9 @@ impl Lang {
                 if v.starts_with("ru") {
                     return Lang::Ru;
                 }
+                if v.starts_with("de") {
+                    return Lang::De;
+                }
                 if !v.is_empty() && v != "c" && v != "posix" {
                     return Lang::En;
                 }
@@ -42,6 +47,7 @@ impl Lang {
             Lang::En => &EN,
             Lang::Tr => &TR,
             Lang::Ru => &RU,
+            Lang::De => &DE,
         }
     }
 }
@@ -320,4 +326,73 @@ pub static RU: T = T {
     retry: "Повторить",
     waiting_tor: "Ожидание Tor…",
     relay_hint: "адрес .onion твоего relay",
+};
+
+pub static DE: T = T {
+    tagline: "Anonymer Chat auf militärischem Niveau",
+    subtitle: "Signal Protocol + Tor onion · null Metadaten · keine Konten · keine Logs",
+    create_chat: "CHAT ERSTELLEN",
+    join_room: "RAUM BEITRETEN",
+    network: "Netzwerk",
+    relay: "Relay",
+    tor_hint: "9050 = Tor-Dienst · 9150 = Tor Browser",
+    allow_direct: "Direktverbindung ohne Tor erlauben",
+    allow_direct_warn: "Das Relay sieht deine IP-Adresse!",
+    read_receipts: "Lesebestätigungen senden",
+    nickname: "Spitzname",
+    nick_rule: "2–24 Buchstaben/Ziffern, keine versteckten Zeichen",
+    password: "Passwort",
+    pw_auto: "Automatisch erzeugen",
+    pw_own: "Eigenes festlegen",
+    suggest: "Passwort vorschlagen",
+    repeat: "Passwort wiederholen",
+    show: "anzeigen",
+    pw_short: "Mindestens 12 Zeichen",
+    pw_mismatch: "Passwörter stimmen nicht überein",
+    create_btn: "Raum erstellen",
+    back: "← Zurück",
+    room_id: "Raum-ID",
+    copy: "Kopieren",
+    copied: "Kopiert ✔",
+    room_created: "RAUM ERSTELLT",
+    share_hint: "Teile beides über einen Kanal, dem du vertraust. Beides ändert sich nie.",
+    clipboard_hint: "Zwischenablage-Manager können Kopien speichern.",
+    enter_room: "Raum betreten ▸",
+    join_btn: "Beitreten ▸",
+    id_ok: "Prüfziffer korrekt",
+    id_bad: "Tippfehler? Prüfziffer falsch",
+    working: "Schlüssel werden abgeleitet (Argon2id, 128 MiB), Verbindung zum Relay…",
+    online: "online",
+    members: "Mitglieder",
+    you: "du",
+    info: "Rauminfo",
+    leave: "Verlassen",
+    burn: "RAUM LÖSCHEN",
+    burn_hold: "1,5 s gedrückt halten zum Löschen",
+    type_msg: "Nachricht… (Enter = senden, Umschalt+Enter = neue Zeile)",
+    send: "Senden",
+    joined: "ist beigetreten",
+    left: "hat den Raum verlassen — Schlüssel erneuert",
+    burned_by: "Raum gelöscht von",
+    burned: "Raum gelöscht — Schlüssel vernichtet",
+    reconnecting: "verbinde neu…",
+    welcome: "Ende-zu-Ende-verschlüsselt · keine Konten · keine Logs",
+    fingerprint_hint: "Der #Code nach dem Namen ist der Schlüssel-Fingerabdruck. Über einen anderen Kanal vergleichen.",
+    capture_on: "Bildschirmaufnahme blockiert",
+    capture_off: "Bildschirmaufnahme kann auf diesem Betriebssystem nicht blockiert werden",
+    you_left: "Du hast den Raum verlassen. Schlüssel aus dem Speicher gelöscht.",
+    you_burned: "Raum gelöscht. Kopie auf dem Relay entfernt, Schlüssel vernichtet.",
+    to_start: "Zum Start",
+    nobody: "Noch niemand hier",
+    leaving: "verlasse den Raum…",
+    tor_mode: "Tor",
+    tor_builtin: "Eingebautes Tor (empfohlen)",
+    tor_external: "Externes Tor (Tor Browser / Tor-Dienst)",
+    tor_off: "Kein Tor",
+    tor_connecting: "Verbinde mit Tor…",
+    tor_ready: "Tor bereit",
+    tor_failed: "Tor-Fehler",
+    retry: "Erneut versuchen",
+    waiting_tor: "Warte auf Tor…",
+    relay_hint: ".onion-Adresse deines Relays",
 };

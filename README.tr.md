@@ -1,4 +1,4 @@
-<p align="center"><a href="README.md">English</a> · <b>Türkçe</b> · <a href="README.ru.md">Русский</a></p>
+<p align="center"><a href="README.md">English</a> · <b>Türkçe</b> · <a href="README.ru.md">Русский</a> · <a href="README.de.md">Deutsch</a></p>
 
 <p align="center"><img src="docs/img/hero.png" alt="GhostLine — başlangıç ekranı" width="820"></p>
 
@@ -274,7 +274,7 @@ sanal makinede Tor ve kullanımdan sonra geri dönebileceğin bir snapshot.
 | ✓✓ **İletim durumu** | ⏳ gönderiliyor · ✓ relay'de · ✓✓ herkese ulaştı · **cyan ✓✓** herkes okudu. Bilgilendirmeler şifreli gider, okundu bilgisi kapatılabilir. |
 | 🚫 **Ekran görüntüsü koruması** | Windows'ta masaüstü uygulaması ekran görüntüsünde, ekran kaydında ve ekran paylaşımında görünmez. Linux'ta ve terminal istemcisinde bu mümkün değil, sınırlamalara bak. |
 | 💥 **Odayı yak** | `/burn`: relay posta kutusunu anında siler (bir daha oluşturulamaz) ve tüm üyelerin istemcileri anahtarları siler. |
-| 🟩 **Hacker arayüzü** | Matrix yağmurlu, mesaj balonlu, basılı tutunca silen **masaüstü uygulaması** (Linux + Windows). Türkçe, İngilizce ve Rusça. Yanında siyah üzerine yeşil **terminal istemcisi** de var ve ikisi birbiriyle konuşabiliyor. |
+| 🟩 **Hacker arayüzü** | Matrix yağmurlu, mesaj balonlu, basılı tutunca silen **masaüstü uygulaması** (Linux + Windows). Türkçe, İngilizce, Rusça ve Almanca. Yanında siyah üzerine yeşil **terminal istemcisi** de var ve ikisi birbiriyle konuşabiliyor. |
 | 🧱 **Web motoru yok** | Masaüstü uygulaması saf Rust (egui): WebView, JavaScript ve HTML yok. Mesajlar her zaman düz metin olarak çizilir. Diske mesaj, ayar veya geçmiş yazılmaz; Tor Browser'daki gibi sadece Tor'un guard/dizin bilgisi tutulur (`GHOSTLINE_AMNESIC=1` ile hiçbir şey). |
 
 ## Kaynak koddan derleme (geliştiriciler)

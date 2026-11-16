@@ -1,4 +1,4 @@
-<p align="center"><b>English</b> · <a href="README.tr.md">Türkçe</a> · <a href="README.ru.md">Русский</a></p>
+<p align="center"><b>English</b> · <a href="README.tr.md">Türkçe</a> · <a href="README.ru.md">Русский</a> · <a href="README.de.md">Deutsch</a></p>
 
 <p align="center"><img src="docs/img/hero.png" alt="GhostLine — start screen" width="820"></p>
 
@@ -277,7 +277,7 @@ snapshot you can roll back after use.
 | ✓✓ **Delivery status** | ⏳ sending · ✓ on relay · ✓✓ delivered to everyone · **cyan ✓✓** read by everyone. Receipts are encrypted and read receipts can be turned off. |
 | 🚫 **Screenshot protection** | Desktop app on Windows: the window is excluded from screenshots, recordings and screen sharing. Linux and the terminal client cannot do this; see limitations. |
 | 💥 **Burn room** | `/burn`: the relay deletes the mailbox instantly (and tombstones it), and every member's client wipes its keys. |
-| 🟩 **Hacker UI** | **Desktop app** (Linux + Windows) with matrix rain, chat bubbles and hold-to-burn, in English, Turkish and Russian. Plus a green-on-black **terminal client**. Both talk to each other. |
+| 🟩 **Hacker UI** | **Desktop app** (Linux + Windows) with matrix rain, chat bubbles and hold-to-burn, in English, Turkish, Russian and German. Plus a green-on-black **terminal client**. Both talk to each other. |
 | 🧱 **No web engine** | The desktop app is pure Rust (egui): no WebView, no JavaScript, no HTML. Message text is only ever drawn as plain text. No messages, settings or history are written to disk; only Tor's guard/directory state is kept, like Tor Browser (`GHOSTLINE_AMNESIC=1` = nothing at all). |
 
 ## Build from source (developers)
@@ -311,7 +311,7 @@ gives a new one) → you get the room ID + password with copy buttons → **Ente
 
 In the room: 👥 members, room info (ID + password to share again), **Leave**, and
 **🔥 BURN ROOM**: hold it for 1.5 s and the room is gone for everyone. Relay and Tor settings
-are under **Network** on the start screen. The language follows your system (EN/TR/RU) and
+are under **Network** on the start screen. The language follows your system (EN/TR/RU/DE) and
 can be switched there.
 
 <p align="center"><img src="docs/img/home.png" width="400"> <img src="docs/img/created.png" width="400"></p>
@@ -424,7 +424,7 @@ A security tool should be upfront about what it **cannot** do:
 - [x] **M3** Relay: RAM only, no logs, TTL, instant delete + tombstone
 - [x] **CLI** Terminal client for Linux and Windows, Tor via SOCKS
 - [x] **M6a** Burn room
-- [x] **M5** Desktop app (Linux + Windows): matrix UI, bubbles, ✔/✔✔, hold-to-burn, screen-capture exclusion on Windows, EN/TR/RU
+- [x] **M5** Desktop app (Linux + Windows): matrix UI, bubbles, ✔/✔✔, hold-to-burn, screen-capture exclusion on Windows, EN/TR/RU/DE
 - [ ] **M2b** `libsignal` (PQXDH + Double Ratchet)
 - [x] **M4a** Built-in Tor (Arti): per-room circuit isolation, rotation every 10 min, amnesic mode
 - [ ] **M4b** Bridges / pluggable transports for countries that block Tor
