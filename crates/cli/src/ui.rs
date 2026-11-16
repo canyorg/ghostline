@@ -230,7 +230,7 @@ fn start_leave(ui: &mut Ui, room: &mut Room) {
 fn command(cmd: &str, ui: &mut Ui, room: &mut Room) {
     match cmd.split_whitespace().next().unwrap_or("") {
         "help" | "h" | "?" => {
-            ui.sys("> /who     list members");
+            ui.sys("> /who     list members + Signal safety numbers");
             ui.sys("> /info    show room id + password (to share)");
             ui.sys("> /clear   clear the screen");
             ui.sys("> /quit    leave the room (others re-key)  · Ctrl+C");
@@ -239,14 +239,18 @@ fn command(cmd: &str, ui: &mut Ui, room: &mut Room) {
             ui.sys("> ✓ on relay · ✓✓ delivered to all · ✓✓ (cyan) read by all");
         }
         "who" => {
-            let m = room.members();
+            let m = room.member_details();
             ui.sys(format!("> {} (you)", ui.me));
             if m.is_empty() {
                 ui.sys("> nobody else here yet");
             }
             for x in m {
-                ui.sys(format!("> {x}"));
+                ui.sys(format!("> {}", x.display));
+                ui.sys(format!(">     safety number: {}", x.safety_number));
             }
+            ui.sys(
+                "> compare safety numbers in person or by phone: same number = nobody in between",
+            );
         }
         "info" => {
             ui.sys(format!("> room id : {}", room.id.display_grouped()));
@@ -286,6 +290,10 @@ fn apply_event(ui: &mut Ui, e: Event) {
         Event::Status { id, status } => {
             ui.statuses.insert(id, status);
         }
+        Event::OutdatedPeer => ui.alert(
+            "> ⚠ someone in this room uses an older GhostLine version — they must update",
+            Color::Yellow,
+        ),
         Event::Burned { by } => {
             if !matches!(ui.mode, Mode::Ending(..)) {
                 ui.alert(

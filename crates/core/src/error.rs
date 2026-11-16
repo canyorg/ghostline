@@ -1,7 +1,7 @@
 //! Error type for ghostline-core.
 
 /// All errors produced by ghostline-core.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq, Clone)]
 pub enum Error {
     /// Room ID contains something other than digits / spaces / dashes.
     #[error("room ID may only contain digits")]
@@ -56,4 +56,16 @@ pub enum Error {
     /// Message refers to a sender or key we do not have.
     #[error("unknown sender or key")]
     UnknownKey,
+    /// Blob comes from an older, incompatible GhostLine version.
+    #[error("message from an older GhostLine version")]
+    OldVersion,
+    /// libsignal reported an error.
+    #[error("signal protocol error: {0}")]
+    Signal(String),
+}
+
+impl From<libsignal_protocol::SignalProtocolError> for Error {
+    fn from(e: libsignal_protocol::SignalProtocolError) -> Self {
+        Error::Signal(e.to_string())
+    }
 }

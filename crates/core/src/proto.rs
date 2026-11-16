@@ -1,102 +1,121 @@
-//! Wire format.
+//! Wire format, protocol version 2 (libsignal).
 //!
 //! Every blob stored on the relay is:
 //!
 //! ```text
-//! nonce(24) ‖ XChaCha20-Poly1305(room_key, pad(bincode(Inner)), aad="ghostline/v1/outer")
+//! nonce(24) ‖ XChaCha20-Poly1305(room_key, pad("G2" ‖ bincode(Inner)), aad="ghostline/v1/outer")
 //! ```
 //!
-//! The outer layer hides *everything* (type, sender, size class only) from the relay.
-//! Inside, each [`Inner`] variant is signed with the sender's per-room Ed25519 key,
-//! and chat content is additionally encrypted with the sender's ratcheting chain key,
-//! so knowing the room password alone does **not** let anyone read messages.
-
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+//! The outer layer (keyed by the room password) hides everything from the relay.
+//! Inside it:
+//!
+//! - [`Hello`]: a member's public Signal identity + PQXDH pre-key bundle, self-signed.
+//! - [`Direct`]: a libsignal *pairwise* message (PQXDH + Double Ratchet) carrying a
+//!   [`Control`] — used to hand out Sender Keys.
+//! - [`Group`]: a libsignal *SenderKeyMessage* carrying [`Content`] (chat, receipts, burn).
+//! - [`Leave`]: a signed "I'm leaving" notice (readable by every member, even new ones).
 
 use bincode::Options;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::crypto;
 use crate::Error;
 
-/// Ed25519 public key of a room member (per room, never reused across rooms).
+/// Protocol version carried in every blob.
+pub const PROTOCOL_VERSION: u8 = 2;
+const MAGIC: [u8; 2] = [b'G', PROTOCOL_VERSION];
+const OUTER_AAD: &[u8] = b"ghostline/v1/outer";
+
+/// Stable per-room member id: SHA-256 of the member's Signal identity key.
 pub type MemberId = [u8; 32];
 /// Random message identifier.
 pub type MsgId = [u8; 16];
 
-const OUTER_AAD: &[u8] = b"ghostline/v1/outer";
-const SIG_DOMAIN: &[u8] = b"ghostline/v1/sig/";
-
-/// Signature domain for [`HelloBody`].
-pub const KIND_HELLO: u8 = 1;
-/// Signature domain for [`KeyDistBody`].
-pub const KIND_KEYDIST: u8 = 2;
-/// Signature domain for [`MsgBody`].
-pub const KIND_MSG: u8 = 3;
-
-/// Top-level message, as found inside the outer encryption layer.
+/// Top-level message inside the outer encryption layer.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Inner {
-    /// "I am here": announces a member's keys and nickname.
-    Hello(Signed<HelloBody>),
-    /// A sender chain key, encrypted to exactly one member.
-    KeyDist(Signed<KeyDistBody>),
-    /// Chat content encrypted with the sender's chain.
-    Msg(Signed<MsgBody>),
+    /// Member announcement (public key material).
+    Hello(Hello),
+    /// Pairwise Signal message.
+    Direct(Direct),
+    /// Group (Sender Key) message.
+    Group(Group),
+    /// Member leaves.
+    Leave(Leave),
 }
 
-/// A body plus an Ed25519 signature over `domain ‖ kind ‖ bincode(body)`.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Signed<T> {
-    /// The signed payload.
-    pub body: T,
-    /// 64-byte Ed25519 signature.
-    pub sig: Vec<u8>,
-}
-
-/// Member announcement.
+/// Public part of a member's Signal identity and PQXDH bundle.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct HelloBody {
-    /// Signing key (= member identity in this room).
-    pub member: MemberId,
-    /// X25519 public key used for key distribution.
-    pub dh: [u8; 32],
+    /// Serialized libsignal `IdentityKey`.
+    pub identity: Vec<u8>,
+    /// Signal registration id.
+    pub registration_id: u32,
+    /// Signed EC pre-key id.
+    pub signed_prekey_id: u32,
+    /// Signed EC pre-key (serialized `PublicKey`).
+    pub signed_prekey: Vec<u8>,
+    /// Identity signature over the signed pre-key.
+    pub signed_prekey_sig: Vec<u8>,
+    /// Kyber/ML-KEM pre-key id.
+    pub kyber_prekey_id: u32,
+    /// Kyber/ML-KEM pre-key (serialized `kem::PublicKey`).
+    pub kyber_prekey: Vec<u8>,
+    /// Identity signature over the Kyber pre-key.
+    pub kyber_prekey_sig: Vec<u8>,
     /// Nickname (validated by receivers).
     pub nick: String,
 }
 
-/// Chain key handed to one member.
+/// [`HelloBody`] signed with the member's identity key (XEdDSA).
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct KeyDistBody {
+pub struct Hello {
+    /// The announcement.
+    pub body: HelloBody,
+    /// Signature over `"ghostline/v2/hello" ‖ bincode(body)`.
+    pub sig: Vec<u8>,
+}
+
+/// Pairwise libsignal message.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Direct {
     /// Sender.
     pub from: MemberId,
     /// Recipient.
     pub to: MemberId,
-    /// Sender's key epoch (increments on every re-key).
-    pub epoch: u32,
-    /// AEAD nonce.
-    pub nonce: [u8; 24],
-    /// Encrypted `chain_key(32) ‖ next_index(u32 BE)`.
-    pub ct: Vec<u8>,
+    /// `true` = `PreKeySignalMessage` (session setup), `false` = `SignalMessage`.
+    pub prekey: bool,
+    /// Serialized libsignal message.
+    pub body: Vec<u8>,
 }
 
-/// Encrypted chat payload.
+/// Group message.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct MsgBody {
+pub struct Group {
     /// Sender.
     pub from: MemberId,
-    /// Sender's key epoch.
-    pub epoch: u32,
-    /// Position in the sender's chain.
-    pub index: u32,
-    /// AEAD nonce.
-    pub nonce: [u8; 24],
-    /// Encrypted, bincode-encoded [`Content`].
-    pub ct: Vec<u8>,
+    /// Serialized libsignal `SenderKeyMessage`.
+    pub body: Vec<u8>,
 }
 
-/// What a [`MsgBody`] decrypts to.
+/// Signed leave notice.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Leave {
+    /// Leaving member.
+    pub member: MemberId,
+    /// Signature over `"ghostline/v2/leave" ‖ member`.
+    pub sig: Vec<u8>,
+}
+
+/// Plaintext of a [`Direct`] message.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum Control {
+    /// Serialized libsignal `SenderKeyDistributionMessage`.
+    SenderKey(Vec<u8>),
+}
+
+/// Plaintext of a [`Group`] message.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Content {
     /// A chat message.
@@ -108,15 +127,13 @@ pub enum Content {
         /// Sender's unix time in seconds.
         ts: u64,
     },
-    /// Delivery / read receipts for one or more messages.
+    /// Delivery / read receipts.
     Receipt {
         /// Delivered or read.
         kind: ReceiptKind,
         /// Which messages.
         ids: Vec<MsgId>,
     },
-    /// Sender leaves the room.
-    Leave,
     /// Sender burned the room.
     Burn,
 }
@@ -129,6 +146,11 @@ pub enum ReceiptKind {
     /// Seen by the recipient (blue ✓✓).
     Read,
 }
+
+/// Signature domain for [`HelloBody`].
+pub const HELLO_DOMAIN: &[u8] = b"ghostline/v2/hello";
+/// Signature domain for [`Leave`].
+pub const LEAVE_DOMAIN: &[u8] = b"ghostline/v2/leave";
 
 fn codec() -> impl Options {
     bincode::options().with_limit(70_000)
@@ -146,43 +168,11 @@ pub fn decode<T: DeserializeOwned>(b: &[u8]) -> Result<T, Error> {
     codec().deserialize(b).map_err(|_| Error::Malformed)
 }
 
-fn sig_input(kind: u8, body: &[u8]) -> Vec<u8> {
-    let mut m = Vec::with_capacity(SIG_DOMAIN.len() + 1 + body.len());
-    m.extend_from_slice(SIG_DOMAIN);
-    m.push(kind);
-    m.extend_from_slice(body);
-    m
-}
-
-impl<T: Serialize> Signed<T> {
-    /// Sign `body` with `key` under the given kind.
-    pub fn new(key: &SigningKey, kind: u8, body: T) -> Self {
-        let sig = key.sign(&sig_input(kind, &encode(&body)));
-        Signed {
-            body,
-            sig: sig.to_bytes().to_vec(),
-        }
-    }
-
-    /// Verify against the claimed signer's public key.
-    pub fn verify(&self, kind: u8, signer: &MemberId) -> Result<(), Error> {
-        let vk = VerifyingKey::from_bytes(signer).map_err(|_| Error::BadSignature)?;
-        let sig: [u8; 64] = self
-            .sig
-            .as_slice()
-            .try_into()
-            .map_err(|_| Error::BadSignature)?;
-        vk.verify(
-            &sig_input(kind, &encode(&self.body)),
-            &Signature::from_bytes(&sig),
-        )
-        .map_err(|_| Error::BadSignature)
-    }
-}
-
 /// Wrap an [`Inner`] for the relay.
 pub fn seal_outer(room_key: &[u8; 32], inner: &Inner) -> Result<Vec<u8>, Error> {
-    let padded = crypto::pad(&encode(inner))?;
+    let mut plain = MAGIC.to_vec();
+    plain.extend_from_slice(&encode(inner));
+    let padded = crypto::pad(&plain)?;
     let (nonce, ct) = crypto::seal(room_key, OUTER_AAD, &padded);
     let mut out = Vec::with_capacity(24 + ct.len());
     out.extend_from_slice(&nonce);
@@ -191,11 +181,18 @@ pub fn seal_outer(room_key: &[u8; 32], inner: &Inner) -> Result<Vec<u8>, Error> 
 }
 
 /// Unwrap a blob fetched from the relay.
+///
+/// Returns [`Error::OldVersion`] for blobs from an older GhostLine (right room key,
+/// unknown format), so the UI can tell the user to update.
 pub fn open_outer(room_key: &[u8; 32], blob: &[u8]) -> Result<Inner, Error> {
     if blob.len() < 24 + 16 {
         return Err(Error::Malformed);
     }
     let nonce: [u8; 24] = blob[..24].try_into().expect("24 bytes");
     let padded = crypto::open(room_key, &nonce, OUTER_AAD, &blob[24..])?;
-    decode(crypto::unpad(&padded)?)
+    let plain = crypto::unpad(&padded)?;
+    match plain.strip_prefix(&MAGIC) {
+        Some(rest) => decode(rest),
+        None => Err(Error::OldVersion),
+    }
 }

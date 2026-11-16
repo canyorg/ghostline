@@ -1177,9 +1177,10 @@ impl GhostApp {
 
         // ── members panel
         if c.show_members {
+            let details = c.room.member_details();
             egui::Panel::right("members")
                 .frame(Frame::new().fill(PANEL).inner_margin(Margin::same(12)))
-                .default_size(220.0)
+                .default_size(260.0)
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new(format!("👥 {}", t.members))
@@ -1188,12 +1189,30 @@ impl GhostApp {
                     );
                     ui.separator();
                     ui.label(RichText::new(format!("● {} ({})", c.me, t.you)).color(GREEN));
-                    if members.is_empty() {
+                    if details.is_empty() {
                         ui.label(RichText::new(t.nobody).small().color(DIM));
                     }
-                    for m in &members {
-                        ui.label(RichText::new(format!("● {m}")).color(MID));
-                    }
+                    ScrollArea::vertical().show(ui, |ui| {
+                        for m in &details {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(format!("● {}", m.display)).color(MID));
+                            ui.label(RichText::new(t.safety_number).small().color(DIM));
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&m.safety_number)
+                                        .monospace()
+                                        .size(12.0)
+                                        .color(GREEN),
+                                )
+                                .wrap()
+                                .selectable(true),
+                            );
+                        }
+                        if !details.is_empty() {
+                            ui.add_space(8.0);
+                            ui.label(RichText::new(t.safety_hint).small().color(DIM));
+                        }
+                    });
                 });
         }
 
@@ -1328,6 +1347,9 @@ fn apply_event(c: &mut Chat, e: Event, t: &T) {
         Event::Status { id, status } => {
             c.statuses.insert(id, status);
         }
+        Event::OutdatedPeer => c
+            .entries
+            .push(Entry::Sys(format!("⚠ {}", t.outdated), AMBER)),
         Event::Burned { by } => {
             if c.ending.is_none() {
                 c.entries

@@ -1,42 +1,53 @@
-//! Room session state machine (sans-IO).
+//! Room session state machine (sans-IO), protocol v2 — built on **libsignal**.
 //!
 //! The network layer feeds every blob from the relay mailbox, in order, into
-//! [`Session::handle_blob`]; the session returns UI [`Event`]s plus blobs that must
-//! be posted back. No sockets, no clocks except the message timestamp — easy to test.
+//! [`Session::handle_blob`]; the session returns UI [`Event`]s plus blobs that must be
+//! posted back.
 //!
-//! ## Cryptography (v0, "Sender Keys")
+//! ## Cryptography
 //!
-//! Modelled on Signal's Sender Keys group scheme, built from audited primitives:
+//! Signal's own library (`libsignal-protocol`) does all message cryptography:
 //!
-//! - Each member creates fresh per-room keys: Ed25519 (identity/signing) and X25519.
-//! - Each member owns a **sending chain**: `mk_i = HKDF(ck_i, "msg")`,
-//!   `ck_{i+1} = HKDF(ck_i, "next")`. Used keys are deleted → forward secrecy.
-//! - A member's chain key is handed to each other member individually, encrypted with
-//!   `HKDF(X25519(sender, recipient))`. A passive attacker who knows the room password
-//!   therefore still cannot read messages.
-//! - When someone leaves, everyone re-keys (new epoch) so the leaver cannot read on.
-//! - Newcomers receive the chain at its *current* index, so they cannot read history.
-//! - Every message is signed; nobody can impersonate another member's identity key.
+//! - **Identity:** each member creates a fresh Signal identity key for this room only
+//!   (rooms cannot be linked to each other).
+//! - **Pairwise sessions:** every pair of members runs **PQXDH** (X25519 + ML-KEM-1024,
+//!   post-quantum) followed by the **Double Ratchet** — forward secrecy *and*
+//!   post-compromise security, exactly as in Signal.
+//! - **Group messages:** Signal's **Sender Keys** (as used by Signal and WhatsApp groups).
+//!   Each member's sender key is handed out over the pairwise Double Ratchet sessions.
+//! - **Re-keying:** a member's sender key is replaced when someone leaves and after every
+//!   [`REKEY_EVERY`] messages, so a stolen sender key stops working.
+//! - **Verification:** [`Session::member_details`] returns Signal **safety numbers**.
 //!
-//! Roadmap: replace with libsignal (PQXDH + Double Ratchet pairwise sessions) for
-//! post-compromise security.
+//! Everything lives in memory (libsignal's in-memory stores) and is dropped with the session.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
-use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use futures::executor::block_on;
+use libsignal_protocol::{
+    create_sender_key_distribution_message, group_decrypt, group_encrypt, kem, message_decrypt,
+    message_encrypt, process_prekey_bundle, process_sender_key_distribution_message,
+    CiphertextMessage, DeviceId, Fingerprint, GenericSignedPreKey, IdentityKey, IdentityKeyPair,
+    InMemSignalProtocolStore, KeyPair, KyberPreKeyRecord, PreKeyBundle, PreKeySignalMessage,
+    ProtocolAddress, PublicKey, SenderKeyDistributionMessage, SignalMessage, SignedPreKeyRecord,
+    Timestamp,
+};
+use rand09::RngCore;
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::crypto;
 use crate::proto::*;
 use crate::{Error, Nickname, RoomSecrets};
 
-const MAX_SKIP: u32 = 2000;
-const MAX_SKIPPED_KEYS: usize = 4000;
 /// Maximum characters per chat message.
 pub const MAX_TEXT_CHARS: usize = 4000;
+/// A member rotates its sender key after this many messages.
+pub const REKEY_EVERY: u32 = 100;
+const SIGNED_PREKEY_ID: u32 = 1;
+const KYBER_PREKEY_ID: u32 = 1;
 
 /// Delivery state of a message *we* sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -87,70 +98,25 @@ pub enum Event {
         /// Display name.
         by: String,
     },
+    /// Someone in the room runs an older, incompatible GhostLine.
+    OutdatedPeer,
 }
 
-#[derive(Zeroize, ZeroizeOnDrop)]
-struct SendChain {
-    epoch: u32,
-    ck: [u8; 32],
-    index: u32,
-}
-
-impl SendChain {
-    fn fresh(epoch: u32) -> Self {
-        SendChain {
-            epoch,
-            ck: crypto::random32(),
-            index: 0,
-        }
-    }
-}
-
-#[derive(Zeroize, ZeroizeOnDrop)]
-struct RecvChain {
-    ck: [u8; 32],
-    next: u32,
-    #[zeroize(skip)]
-    skipped: HashMap<u32, Zeroizing<[u8; 32]>>,
-}
-
-fn chain_step(ck: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    (
-        crypto::expand(ck, &[b"ghostline/v1/chain/msg"]),
-        crypto::expand(ck, &[b"ghostline/v1/chain/next"]),
-    )
-}
-
-impl RecvChain {
-    fn key_for(&mut self, index: u32) -> Option<Zeroizing<[u8; 32]>> {
-        if index < self.next {
-            return self.skipped.remove(&index);
-        }
-        if index - self.next > MAX_SKIP {
-            return None;
-        }
-        while self.next < index {
-            let (mk, next) = chain_step(&self.ck);
-            self.skipped.insert(self.next, Zeroizing::new(mk));
-            self.ck = next;
-            self.next += 1;
-        }
-        let (mk, next) = chain_step(&self.ck);
-        self.ck = next;
-        self.next += 1;
-        while self.skipped.len() > MAX_SKIPPED_KEYS {
-            let oldest = *self.skipped.keys().min().expect("non-empty");
-            self.skipped.remove(&oldest);
-        }
-        Some(Zeroizing::new(mk))
-    }
+/// A member as shown in the members list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberInfo {
+    /// `nick#fingerprint`.
+    pub display: String,
+    /// Signal safety number (60 digits in 12 groups of 5). Identical on both sides.
+    pub safety_number: String,
 }
 
 struct Member {
     nick: String,
-    dh: [u8; 32],
-    chains: BTreeMap<u32, RecvChain>,
+    identity: IdentityKey,
+    addr: ProtocolAddress,
     active: bool,
+    safety_number: String,
 }
 
 struct Outgoing {
@@ -180,7 +146,7 @@ impl Outgoing {
     }
 }
 
-/// Short, human-comparable fingerprint of a member key (6 hex chars).
+/// Short, human-comparable fingerprint of a member id (6 hex chars).
 pub fn fingerprint(m: &MemberId) -> String {
     m[..3].iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -189,42 +155,123 @@ fn display(nick: &str, m: &MemberId) -> String {
     format!("{nick}#{}", fingerprint(m))
 }
 
-fn now() -> u64 {
+fn member_id(identity: &IdentityKey) -> MemberId {
+    let mut h = Sha256::new();
+    h.update(b"ghostline/v2/member");
+    h.update(identity.serialize());
+    h.finalize().into()
+}
+
+fn address(id: &MemberId) -> ProtocolAddress {
+    ProtocolAddress::new(
+        id.iter().map(|b| format!("{b:02x}")).collect(),
+        DeviceId::try_from(1u32).expect("1 is a valid device id"),
+    )
+}
+
+fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
+fn sig_err<E: std::fmt::Display>(e: E) -> Error {
+    Error::Signal(e.to_string())
+}
+
+fn signed(domain: &[u8], body: &[u8]) -> Vec<u8> {
+    [domain, body].concat()
+}
+
 /// One user's view of one room.
 pub struct Session {
     room_key: Zeroizing<[u8; 32]>,
-    sign: SigningKey,
-    dh: StaticSecret,
+    identity: IdentityKeyPair,
     me: MemberId,
+    my_addr: ProtocolAddress,
     nick: Nickname,
-    send: SendChain,
+    store: InMemSignalProtocolStore,
+    hello: Hello,
+    dist_id: Uuid,
+    sent_since_rekey: u32,
     members: HashMap<MemberId, Member>,
     outbox: HashMap<MsgId, Outgoing>,
     pending_delivered: Vec<MsgId>,
+    warned_outdated: bool,
 }
 
 impl Session {
-    /// Fresh per-room identity.
-    pub fn new(nick: Nickname, secrets: &RoomSecrets) -> Self {
-        let sign = SigningKey::generate(&mut OsRng);
-        let me = sign.verifying_key().to_bytes();
-        Session {
+    /// Fresh per-room Signal identity, pre-keys and sender key.
+    pub fn new(nick: Nickname, secrets: &RoomSecrets) -> Result<Self, Error> {
+        let mut rng = rand09::rng();
+        let identity = IdentityKeyPair::generate(&mut rng);
+        let me = member_id(identity.identity_key());
+        let my_addr = address(&me);
+        let registration_id = rng.next_u32() & 0x3fff;
+        let mut store = InMemSignalProtocolStore::new(identity, registration_id)?;
+
+        // Signed EC pre-key.
+        let spk = KeyPair::generate(&mut rng);
+        let spk_sig = identity
+            .private_key()
+            .calculate_signature(&spk.public_key.serialize(), &mut rng)
+            .map_err(sig_err)?;
+        let ts = Timestamp::from_epoch_millis(now_secs() * 1000);
+        let spk_record = SignedPreKeyRecord::new(SIGNED_PREKEY_ID.into(), ts, &spk, &spk_sig);
+        block_on(libsignal_protocol::SignedPreKeyStore::save_signed_pre_key(
+            &mut store,
+            SIGNED_PREKEY_ID.into(),
+            &spk_record,
+        ))?;
+
+        // Post-quantum (ML-KEM-1024 / Kyber) last-resort pre-key.
+        let kyber = KyberPreKeyRecord::generate(
+            kem::KeyType::Kyber1024,
+            KYBER_PREKEY_ID.into(),
+            identity.private_key(),
+        )?;
+        block_on(libsignal_protocol::KyberPreKeyStore::save_kyber_pre_key(
+            &mut store,
+            KYBER_PREKEY_ID.into(),
+            &kyber,
+        ))?;
+
+        let body = HelloBody {
+            identity: identity.identity_key().serialize().to_vec(),
+            registration_id,
+            signed_prekey_id: SIGNED_PREKEY_ID,
+            signed_prekey: spk.public_key.serialize().to_vec(),
+            signed_prekey_sig: spk_sig.to_vec(),
+            kyber_prekey_id: KYBER_PREKEY_ID,
+            kyber_prekey: kyber.public_key()?.serialize().to_vec(),
+            kyber_prekey_sig: kyber.signature()?,
+            nick: nick.as_str().to_owned(),
+        };
+        let sig = identity
+            .private_key()
+            .calculate_signature(&signed(HELLO_DOMAIN, &encode(&body)), &mut rng)
+            .map_err(sig_err)?
+            .to_vec();
+
+        let mut s = Session {
             room_key: Zeroizing::new(secrets.room_key),
-            sign,
-            dh: StaticSecret::random_from_rng(OsRng),
+            identity,
             me,
+            my_addr,
             nick,
-            send: SendChain::fresh(0),
+            store,
+            hello: Hello { body, sig },
+            dist_id: Uuid::from_bytes(crypto::random16()),
+            sent_since_rekey: 0,
             members: HashMap::new(),
             outbox: HashMap::new(),
             pending_delivered: Vec::new(),
-        }
+            warned_outdated: false,
+        };
+        // Create our first sender key chain.
+        s.current_skdm()?;
+        Ok(s)
     }
 
     /// Our display name (`nick#fingerprint`).
@@ -234,124 +281,122 @@ impl Session {
 
     /// Display names of the other active members.
     pub fn members(&self) -> Vec<String> {
-        let mut v: Vec<String> = self
+        self.member_details()
+            .into_iter()
+            .map(|m| m.display)
+            .collect()
+    }
+
+    /// Other active members with their Signal safety numbers.
+    pub fn member_details(&self) -> Vec<MemberInfo> {
+        let mut v: Vec<MemberInfo> = self
             .members
             .iter()
             .filter(|(_, m)| m.active)
-            .map(|(id, m)| display(&m.nick, id))
+            .map(|(id, m)| MemberInfo {
+                display: display(&m.nick, id),
+                safety_number: m.safety_number.clone(),
+            })
             .collect();
-        v.sort();
+        v.sort_by(|a, b| a.display.cmp(&b.display));
         v
     }
 
     /// Blob announcing ourselves. Post this first.
     pub fn hello_blob(&self) -> Result<Vec<u8>, Error> {
-        let body = HelloBody {
-            member: self.me,
-            dh: PublicKey::from(&self.dh).to_bytes(),
-            nick: self.nick.as_str().to_owned(),
-        };
+        seal_outer(&self.room_key, &Inner::Hello(self.hello.clone()))
+    }
+
+    fn current_skdm(&mut self) -> Result<SenderKeyDistributionMessage, Error> {
+        let mut rng = rand09::rng();
+        Ok(block_on(create_sender_key_distribution_message(
+            &self.my_addr,
+            self.dist_id,
+            &mut self.store,
+            &mut rng,
+        ))?)
+    }
+
+    fn direct(&mut self, to: &MemberId, control: &Control) -> Result<Vec<u8>, Error> {
+        let addr = self.members.get(to).ok_or(Error::UnknownKey)?.addr.clone();
+        let mut rng = rand09::rng();
+        let ct = block_on(message_encrypt(
+            &encode(control),
+            &addr,
+            &self.my_addr,
+            &mut self.store.session_store,
+            &mut self.store.identity_store,
+            SystemTime::now(),
+            &mut rng,
+        ))?;
+        let prekey = matches!(ct, CiphertextMessage::PreKeySignalMessage(_));
         seal_outer(
             &self.room_key,
-            &Inner::Hello(Signed::new(&self.sign, KIND_HELLO, body)),
+            &Inner::Direct(Direct {
+                from: self.me,
+                to: *to,
+                prekey,
+                body: ct.serialize().to_vec(),
+            }),
         )
     }
 
-    fn keydist_key(
-        &self,
-        their_dh: &[u8; 32],
-        from: &MemberId,
-        to: &MemberId,
-        epoch: u32,
-    ) -> Result<Zeroizing<[u8; 32]>, Error> {
-        let shared = self.dh.diffie_hellman(&PublicKey::from(*their_dh));
-        if !shared.was_contributory() {
-            return Err(Error::UnknownKey);
-        }
-        Ok(Zeroizing::new(crypto::expand(
-            shared.as_bytes(),
-            &[b"ghostline/v1/keydist", from, to, &epoch.to_be_bytes()],
-        )))
+    fn send_sender_key_to(&mut self, to: &MemberId) -> Result<Vec<u8>, Error> {
+        let skdm = self.current_skdm()?;
+        self.direct(to, &Control::SenderKey(skdm.serialized().to_vec()))
     }
 
-    fn keydist_aad(from: &MemberId, to: &MemberId, epoch: u32) -> Vec<u8> {
-        [&from[..], &to[..], &epoch.to_be_bytes()].concat()
-    }
-
-    fn keydist_to(&self, to: &MemberId, their_dh: &[u8; 32]) -> Result<Vec<u8>, Error> {
-        let epoch = self.send.epoch;
-        let key = self.keydist_key(their_dh, &self.me, to, epoch)?;
-        let mut pt = Zeroizing::new([0u8; 36]);
-        pt[..32].copy_from_slice(&self.send.ck);
-        pt[32..].copy_from_slice(&self.send.index.to_be_bytes());
-        let (nonce, ct) = crypto::seal(&key, &Self::keydist_aad(&self.me, to, epoch), &pt[..]);
-        let body = KeyDistBody {
-            from: self.me,
-            to: *to,
-            epoch,
-            nonce,
-            ct,
-        };
-        seal_outer(
-            &self.room_key,
-            &Inner::KeyDist(Signed::new(&self.sign, KIND_KEYDIST, body)),
-        )
-    }
-
+    /// New sender key, handed to every active member over the pairwise sessions.
     fn rekey(&mut self) -> Vec<Vec<u8>> {
-        self.send = SendChain::fresh(self.send.epoch + 1);
-        let targets: Vec<(MemberId, [u8; 32])> = self
+        self.dist_id = Uuid::from_bytes(crypto::random16());
+        self.sent_since_rekey = 0;
+        let targets: Vec<MemberId> = self
             .members
             .iter()
             .filter(|(_, m)| m.active)
-            .map(|(id, m)| (*id, m.dh))
+            .map(|(id, _)| *id)
             .collect();
         targets
             .iter()
-            .filter_map(|(id, dh)| self.keydist_to(id, dh).ok())
+            .filter_map(|id| self.send_sender_key_to(id).ok())
             .collect()
     }
 
-    fn msg_aad(from: &MemberId, epoch: u32, index: u32) -> Vec<u8> {
-        [&from[..], &epoch.to_be_bytes(), &index.to_be_bytes()].concat()
-    }
-
-    fn encrypt_content(&mut self, content: &Content) -> Result<Vec<u8>, Error> {
-        let (mk, next) = chain_step(&self.send.ck);
-        let mk = Zeroizing::new(mk);
-        let index = self.send.index;
-        self.send.ck = next;
-        self.send.index += 1;
-        let epoch = self.send.epoch;
-        let (nonce, ct) = crypto::seal(
-            &mk,
-            &Self::msg_aad(&self.me, epoch, index),
+    fn group(&mut self, content: &Content) -> Result<Vec<u8>, Error> {
+        let mut rng = rand09::rng();
+        let skm = block_on(group_encrypt(
+            &mut self.store,
+            &self.my_addr,
+            self.dist_id,
             &encode(content),
-        );
-        let body = MsgBody {
-            from: self.me,
-            epoch,
-            index,
-            nonce,
-            ct,
-        };
+            &mut rng,
+        ))?;
+        self.sent_since_rekey += 1;
         seal_outer(
             &self.room_key,
-            &Inner::Msg(Signed::new(&self.sign, KIND_MSG, body)),
+            &Inner::Group(Group {
+                from: self.me,
+                body: skm.serialized().to_vec(),
+            }),
         )
     }
 
-    /// Encrypt a chat message. Returns its id and the blob to post.
-    pub fn send_text(&mut self, text: &str) -> Result<(MsgId, Vec<u8>), Error> {
+    /// Encrypt a chat message. Returns its id and the blobs to post **in order**
+    /// (a sender-key rotation may come first).
+    pub fn send_text(&mut self, text: &str) -> Result<(MsgId, Vec<Vec<u8>>), Error> {
         if text.chars().count() > MAX_TEXT_CHARS {
             return Err(Error::TooLarge);
         }
+        let mut blobs = Vec::new();
+        if self.sent_since_rekey >= REKEY_EVERY {
+            blobs.extend(self.rekey());
+        }
         let id = crypto::random16();
-        let blob = self.encrypt_content(&Content::Text {
+        blobs.push(self.group(&Content::Text {
             id,
             text: text.to_owned(),
-            ts: now(),
-        })?;
+            ts: now_secs(),
+        })?);
         let recipients = self
             .members
             .iter()
@@ -367,7 +412,7 @@ impl Session {
                 status: Status::Pending,
             },
         );
-        Ok((id, blob))
+        Ok((id, blobs))
     }
 
     /// The relay acknowledged one of our messages (✓).
@@ -387,7 +432,7 @@ impl Session {
             return None;
         }
         let ids = std::mem::take(&mut self.pending_delivered);
-        self.encrypt_content(&Content::Receipt {
+        self.group(&Content::Receipt {
             kind: ReceiptKind::Delivered,
             ids,
         })
@@ -399,21 +444,34 @@ impl Session {
         if ids.is_empty() {
             return None;
         }
-        self.encrypt_content(&Content::Receipt {
+        self.group(&Content::Receipt {
             kind: ReceiptKind::Read,
             ids,
         })
         .ok()
     }
 
-    /// "I'm leaving" — post before closing.
+    /// "I'm leaving" — post before closing. Signed, readable by every member.
     pub fn leave_blob(&mut self) -> Result<Vec<u8>, Error> {
-        self.encrypt_content(&Content::Leave)
+        let mut rng = rand09::rng();
+        let sig = self
+            .identity
+            .private_key()
+            .calculate_signature(&signed(LEAVE_DOMAIN, &self.me), &mut rng)
+            .map_err(sig_err)?
+            .to_vec();
+        seal_outer(
+            &self.room_key,
+            &Inner::Leave(Leave {
+                member: self.me,
+                sig,
+            }),
+        )
     }
 
     /// "Room burned" — post, then DELETE the mailbox.
     pub fn burn_blob(&mut self) -> Result<Vec<u8>, Error> {
-        self.encrypt_content(&Content::Burn)
+        self.group(&Content::Burn)
     }
 
     /// Process one blob from the mailbox. Undecryptable / foreign / invalid blobs
@@ -421,7 +479,12 @@ impl Session {
     pub fn handle_blob(&mut self, blob: &[u8]) -> (Vec<Event>, Vec<Vec<u8>>) {
         let mut events = Vec::new();
         let mut out = Vec::new();
-        let _ = self.handle_inner(blob, &mut events, &mut out);
+        if let Err(Error::OldVersion) = self.handle_inner(blob, &mut events, &mut out) {
+            if !self.warned_outdated {
+                self.warned_outdated = true;
+                events.push(Event::OutdatedPeer);
+            }
+        }
         (events, out)
     }
 
@@ -432,141 +495,215 @@ impl Session {
         out: &mut Vec<Vec<u8>>,
     ) -> Result<(), Error> {
         match open_outer(&self.room_key, blob)? {
-            Inner::Hello(s) => {
-                let b = &s.body;
-                if b.member == self.me {
-                    return Ok(());
-                }
-                s.verify(KIND_HELLO, &b.member)?;
-                let nick = Nickname::new(&b.nick).map_err(|_| Error::Malformed)?;
-                if self.members.get(&b.member).is_some_and(|m| m.active) {
-                    return Ok(());
-                }
-                self.members.insert(
-                    b.member,
-                    Member {
-                        nick: nick.as_str().to_owned(),
-                        dh: b.dh,
-                        chains: BTreeMap::new(),
-                        active: true,
-                    },
-                );
-                events.push(Event::Joined {
-                    who: display(nick.as_str(), &b.member),
-                });
-                out.push(self.keydist_to(&b.member, &b.dh)?);
-            }
-            Inner::KeyDist(s) => {
-                let b = &s.body;
-                if b.to != self.me {
-                    return Ok(());
-                }
-                let their_dh = self.members.get(&b.from).ok_or(Error::UnknownKey)?.dh;
-                s.verify(KIND_KEYDIST, &b.from)?;
-                let key = self.keydist_key(&their_dh, &b.from, &self.me, b.epoch)?;
-                let pt = Zeroizing::new(crypto::open(
-                    &key,
-                    &b.nonce,
-                    &Self::keydist_aad(&b.from, &self.me, b.epoch),
-                    &b.ct,
-                )?);
-                if pt.len() != 36 {
-                    return Err(Error::Malformed);
-                }
-                let m = self.members.get_mut(&b.from).ok_or(Error::UnknownKey)?;
-                if m.chains.contains_key(&b.epoch) {
-                    return Ok(());
-                }
-                let mut ck = [0u8; 32];
-                ck.copy_from_slice(&pt[..32]);
-                let next = u32::from_be_bytes(pt[32..36].try_into().expect("4 bytes"));
-                m.chains.insert(
-                    b.epoch,
-                    RecvChain {
-                        ck,
-                        next,
-                        skipped: HashMap::new(),
-                    },
-                );
-                ck.zeroize();
-                while m.chains.len() > 2 {
-                    let oldest = *m.chains.keys().next().expect("non-empty");
-                    m.chains.remove(&oldest);
-                }
-            }
-            Inner::Msg(s) => {
-                let b = &s.body;
-                if b.from == self.me {
-                    return Ok(());
-                }
-                s.verify(KIND_MSG, &b.from)?;
-                let m = self.members.get_mut(&b.from).ok_or(Error::UnknownKey)?;
-                let chain = m.chains.get_mut(&b.epoch).ok_or(Error::UnknownKey)?;
-                let mk = chain.key_for(b.index).ok_or(Error::UnknownKey)?;
-                let pt = Zeroizing::new(crypto::open(
-                    &mk,
-                    &b.nonce,
-                    &Self::msg_aad(&b.from, b.epoch, b.index),
-                    &b.ct,
-                )?);
-                let who = display(&m.nick, &b.from);
-                let from = b.from;
-                match decode::<Content>(&pt)? {
-                    Content::Text { id, text, ts } => {
-                        if text.chars().count() > MAX_TEXT_CHARS {
-                            return Err(Error::TooLarge);
-                        }
-                        self.pending_delivered.push(id);
-                        events.push(Event::Message {
-                            id,
-                            from: who,
-                            text,
-                            ts,
-                        });
-                    }
-                    Content::Receipt { kind, ids } => {
-                        for id in ids {
-                            if let Some(o) = self.outbox.get_mut(&id) {
-                                if !o.recipients.contains(&from) {
-                                    continue;
-                                }
-                                o.delivered.insert(from);
-                                if kind == ReceiptKind::Read {
-                                    o.read.insert(from);
-                                }
-                                if let Some(status) = o.recompute() {
-                                    events.push(Event::Status { id, status });
-                                }
-                            }
-                        }
-                        self.outbox.retain(|_, o| o.status != Status::Read);
-                    }
-                    Content::Leave => {
-                        m.active = false;
-                        m.chains.clear();
-                        events.push(Event::Left { who });
-                        for (id, o) in self.outbox.iter_mut() {
-                            o.recipients.remove(&from);
-                            if let Some(status) = o.recompute() {
-                                events.push(Event::Status { id: *id, status });
-                            }
-                        }
-                        out.extend(self.rekey());
-                    }
-                    Content::Burn => events.push(Event::Burned { by: who }),
-                }
+            Inner::Hello(h) => self.on_hello(h, events, out),
+            Inner::Direct(d) => self.on_direct(d),
+            Inner::Group(g) => self.on_group(g, events),
+            Inner::Leave(l) => self.on_leave(l, events, out),
+        }
+    }
+
+    fn on_hello(
+        &mut self,
+        h: Hello,
+        events: &mut Vec<Event>,
+        out: &mut Vec<Vec<u8>>,
+    ) -> Result<(), Error> {
+        let b = &h.body;
+        let identity = IdentityKey::decode(&b.identity)?;
+        let id = member_id(&identity);
+        if id == self.me {
+            return Ok(());
+        }
+        if !identity
+            .public_key()
+            .verify_signature(&signed(HELLO_DOMAIN, &encode(b)), &h.sig)
+        {
+            return Err(Error::BadSignature);
+        }
+        let nick = Nickname::new(&b.nick).map_err(|_| Error::Malformed)?;
+        if self.members.contains_key(&id) {
+            return Ok(()); // replayed hello, or a member who left (never re-admitted)
+        }
+        let bundle = PreKeyBundle::new(
+            b.registration_id,
+            DeviceId::try_from(1u32).expect("valid"),
+            None,
+            b.signed_prekey_id.into(),
+            PublicKey::deserialize(&b.signed_prekey).map_err(sig_err)?,
+            b.signed_prekey_sig.clone(),
+            b.kyber_prekey_id.into(),
+            kem::PublicKey::deserialize(&b.kyber_prekey)?,
+            b.kyber_prekey_sig.clone(),
+            identity,
+        )?;
+        let addr = address(&id);
+        let mut rng = rand09::rng();
+        // PQXDH: verifies both pre-key signatures and starts a Double Ratchet session.
+        block_on(process_prekey_bundle(
+            &addr,
+            &self.my_addr,
+            &mut self.store.session_store,
+            &mut self.store.identity_store,
+            &bundle,
+            SystemTime::now(),
+            &mut rng,
+        ))?;
+        let safety_number = Fingerprint::new(
+            2,
+            5200,
+            &self.me,
+            self.identity.identity_key(),
+            &id,
+            &identity,
+        )
+        .and_then(|f| f.display_string())
+        .map(|s| {
+            s.as_bytes()
+                .chunks(5)
+                .map(|c| String::from_utf8_lossy(c).into_owned())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+        self.members.insert(
+            id,
+            Member {
+                nick: nick.as_str().to_owned(),
+                identity,
+                addr,
+                active: true,
+                safety_number,
+            },
+        );
+        events.push(Event::Joined {
+            who: display(nick.as_str(), &id),
+        });
+        out.push(self.send_sender_key_to(&id)?);
+        Ok(())
+    }
+
+    fn on_direct(&mut self, d: Direct) -> Result<(), Error> {
+        if d.to != self.me {
+            return Ok(());
+        }
+        let m = self.members.get(&d.from).ok_or(Error::UnknownKey)?;
+        if !m.active {
+            return Ok(());
+        }
+        let addr = m.addr.clone();
+        let ct = if d.prekey {
+            CiphertextMessage::PreKeySignalMessage(PreKeySignalMessage::try_from(&d.body[..])?)
+        } else {
+            CiphertextMessage::SignalMessage(SignalMessage::try_from(&d.body[..])?)
+        };
+        let mut rng = rand09::rng();
+        let store = &mut self.store;
+        let plain = Zeroizing::new(block_on(message_decrypt(
+            &ct,
+            &addr,
+            &self.my_addr,
+            &mut store.session_store,
+            &mut store.identity_store,
+            &mut store.pre_key_store,
+            &store.signed_pre_key_store,
+            &mut store.kyber_pre_key_store,
+            &mut rng,
+        ))?);
+        match decode::<Control>(&plain)? {
+            Control::SenderKey(bytes) => {
+                let skdm = SenderKeyDistributionMessage::try_from(&bytes[..])?;
+                block_on(process_sender_key_distribution_message(
+                    &addr,
+                    &skdm,
+                    &mut self.store.sender_key_store,
+                ))?;
             }
         }
         Ok(())
     }
-}
 
-impl Drop for Session {
-    fn drop(&mut self) {
-        // SigningKey and StaticSecret zeroize themselves (zeroize feature);
-        // chains are ZeroizeOnDrop; room_key is Zeroizing.
-        self.members.clear();
-        self.outbox.clear();
+    fn on_group(&mut self, g: Group, events: &mut Vec<Event>) -> Result<(), Error> {
+        if g.from == self.me {
+            return Ok(());
+        }
+        let m = self.members.get(&g.from).ok_or(Error::UnknownKey)?;
+        if !m.active {
+            return Ok(());
+        }
+        let (addr, who) = (m.addr.clone(), display(&m.nick, &g.from));
+        let plain = Zeroizing::new(block_on(group_decrypt(
+            &g.body,
+            &mut self.store.sender_key_store,
+            &addr,
+        ))?);
+        let from = g.from;
+        match decode::<Content>(&plain)? {
+            Content::Text { id, text, ts } => {
+                if text.chars().count() > MAX_TEXT_CHARS {
+                    return Err(Error::TooLarge);
+                }
+                self.pending_delivered.push(id);
+                events.push(Event::Message {
+                    id,
+                    from: who,
+                    text,
+                    ts,
+                });
+            }
+            Content::Receipt { kind, ids } => {
+                for id in ids {
+                    if let Some(o) = self.outbox.get_mut(&id) {
+                        if !o.recipients.contains(&from) {
+                            continue;
+                        }
+                        o.delivered.insert(from);
+                        if kind == ReceiptKind::Read {
+                            o.read.insert(from);
+                        }
+                        if let Some(status) = o.recompute() {
+                            events.push(Event::Status { id, status });
+                        }
+                    }
+                }
+                self.outbox.retain(|_, o| o.status != Status::Read);
+            }
+            Content::Burn => events.push(Event::Burned { by: who }),
+        }
+        Ok(())
+    }
+
+    fn on_leave(
+        &mut self,
+        l: Leave,
+        events: &mut Vec<Event>,
+        out: &mut Vec<Vec<u8>>,
+    ) -> Result<(), Error> {
+        if l.member == self.me {
+            return Ok(());
+        }
+        let m = self.members.get_mut(&l.member).ok_or(Error::UnknownKey)?;
+        if !m.active {
+            return Ok(());
+        }
+        if !m
+            .identity
+            .public_key()
+            .verify_signature(&signed(LEAVE_DOMAIN, &l.member), &l.sig)
+        {
+            return Err(Error::BadSignature);
+        }
+        m.active = false;
+        let who = display(&m.nick, &l.member);
+        events.push(Event::Left { who });
+        for (id, o) in self.outbox.iter_mut() {
+            o.recipients.remove(&l.member);
+            if let Some(status) = o.recompute() {
+                events.push(Event::Status { id: *id, status });
+            }
+        }
+        // The leaver must not be able to read anything we send from now on.
+        out.extend(self.rekey());
+        Ok(())
     }
 }
 
@@ -594,7 +731,7 @@ mod tests {
             )
         }
         fn join(&mut self, nick: &str, secrets: &RoomSecrets) -> usize {
-            let s = Session::new(Nickname::new(nick).unwrap(), secrets);
+            let s = Session::new(Nickname::new(nick).unwrap(), secrets).unwrap();
             self.mailbox.push(s.hello_blob().unwrap());
             self.clients.push((s, 0, vec![]));
             self.pump();
@@ -603,7 +740,6 @@ mod tests {
         fn post(&mut self, blob: Vec<u8>) {
             self.mailbox.push(blob);
         }
-        /// Deliver everything to everyone until quiescent.
         fn pump(&mut self) {
             loop {
                 let mut progressed = false;
@@ -627,8 +763,8 @@ mod tests {
             }
         }
         fn send(&mut self, who: usize, text: &str) -> MsgId {
-            let (id, blob) = self.clients[who].0.send_text(text).unwrap();
-            self.post(blob);
+            let (id, blobs) = self.clients[who].0.send_text(text).unwrap();
+            self.mailbox.extend(blobs);
             self.clients[who].0.mark_sent(&id);
             self.pump();
             id
@@ -669,6 +805,19 @@ mod tests {
     }
 
     #[test]
+    fn three_members() {
+        let (mut sim, sec) = Sim::new();
+        let a = sim.join("alice", &sec);
+        let b = sim.join("bob", &sec);
+        let c = sim.join("carol", &sec);
+        sim.send(c, "carol here");
+        sim.send(a, "hi carol");
+        assert_eq!(sim.texts(a), vec!["carol here"]);
+        assert_eq!(sim.texts(b), vec!["carol here", "hi carol"]);
+        assert_eq!(sim.texts(c), vec!["hi carol"]);
+    }
+
+    #[test]
     fn newcomer_cannot_read_history() {
         let (mut sim, sec) = Sim::new();
         let a = sim.join("alice", &sec);
@@ -693,37 +842,46 @@ mod tests {
             .2
             .iter()
             .any(|e| matches!(e, Event::Left { .. })));
-
-        // A malicious leaver keeps processing the mailbox, but gets no new keys.
         sim.send(a, "after carol left");
         assert_eq!(sim.texts(b), vec!["after carol left"]);
         assert!(sim.texts(c).is_empty());
     }
 
     #[test]
-    fn password_holder_cannot_forge_or_read() {
+    fn periodic_rekey_keeps_working() {
+        let (mut sim, sec) = Sim::new();
+        let a = sim.join("alice", &sec);
+        let b = sim.join("bob", &sec);
+        let n = REKEY_EVERY + 20;
+        for i in 0..n {
+            sim.send(a, &format!("m{i}"));
+        }
+        assert_eq!(sim.texts(b).len(), n as usize);
+        assert_eq!(sim.texts(b).last().unwrap(), &format!("m{}", n - 1));
+    }
+
+    #[test]
+    fn password_holder_cannot_read_or_forge() {
         let (mut sim, sec) = Sim::new();
         let a = sim.join("alice", &sec);
         let b = sim.join("bob", &sec);
         sim.send(a, "only for members");
 
-        // Eve knows the password (room_key) and reads the whole mailbox passively,
-        // without posting a Hello: she can open the outer layer, but not the content.
-        let mut eve = Session::new(Nickname::new("eve").unwrap(), &sec);
+        // Eve knows the password and reads the whole mailbox without announcing herself.
+        let mut eve = Session::new(Nickname::new("eve").unwrap(), &sec).unwrap();
         let mut seen = vec![];
         for blob in sim.mailbox.clone() {
             seen.extend(eve.handle_blob(&blob).0);
         }
         assert!(!seen.iter().any(|e| matches!(e, Event::Message { .. })));
 
-        // Eve replays alice's message: rejected (index already used).
+        // Replay of alice's group message: rejected by libsignal (duplicate counter).
         let alice = sim.clients[a].0.me;
         let replay = sim
             .mailbox
             .iter()
             .find(|blob| {
-                matches!(open_outer(&sec.room_key, blob),
-                    Ok(Inner::Msg(s)) if s.body.from == alice)
+                matches!(open_outer(&sec.room_key, blob), Ok(Inner::Group(g)) if g.from == alice)
             })
             .unwrap()
             .clone();
@@ -732,27 +890,42 @@ mod tests {
         sim.pump();
         assert_eq!(sim.texts(b).len(), before);
 
-        // Eve tampers with a signed message: signature fails.
-        let Ok(Inner::Msg(mut s)) = open_outer(&sec.room_key, &replay) else {
-            panic!("expected Msg")
+        // Tampered group message: signature check fails.
+        let Ok(Inner::Group(mut g)) = open_outer(&sec.room_key, &replay) else {
+            panic!()
         };
-        s.body.index += 100;
-        let forged = seal_outer(&sec.room_key, &Inner::Msg(s)).unwrap();
-        sim.post(forged);
+        let n = g.body.len();
+        g.body[n - 70] ^= 1;
+        sim.post(seal_outer(&sec.room_key, &Inner::Group(g)).unwrap());
         sim.pump();
         assert_eq!(sim.texts(b).len(), before);
 
-        // Eve posts a Hello pretending to be alice (alice's member id, Eve's keys):
-        // she cannot produce alice's signature.
-        let mut fake = match open_outer(&sec.room_key, &sim.mailbox[0]).unwrap() {
-            Inner::Hello(h) => h,
-            _ => panic!("first blob is alice's hello"),
+        // Eve claims to be alice in a group message: she has no sender key for that address.
+        let (_, blobs) = eve.send_text("i am alice").unwrap();
+        let Ok(Inner::Group(mut g)) = open_outer(&sec.room_key, blobs.last().unwrap()) else {
+            panic!()
         };
-        fake.body.nick = "alice".into();
-        fake.body.dh = PublicKey::from(&eve.dh).to_bytes();
-        sim.post(seal_outer(&sec.room_key, &Inner::Hello(fake)).unwrap());
+        g.from = alice;
+        sim.post(seal_outer(&sec.room_key, &Inner::Group(g)).unwrap());
         sim.pump();
         assert_eq!(sim.texts(b).len(), before);
+
+        // Eve forges a Leave for alice: signature fails, alice stays.
+        sim.post(
+            seal_outer(
+                &sec.room_key,
+                &Inner::Leave(Leave {
+                    member: alice,
+                    sig: vec![0u8; 64],
+                }),
+            )
+            .unwrap(),
+        );
+        sim.pump();
+        assert!(!sim.clients[b]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Left { .. })));
     }
 
     #[test]
@@ -761,7 +934,7 @@ mod tests {
         let a = sim.join("alice", &sec);
         sim.send(a, "x");
         let (_, other) = Sim::new();
-        let mut mallory = Session::new(Nickname::new("mallory").unwrap(), &other);
+        let mut mallory = Session::new(Nickname::new("mallory").unwrap(), &other).unwrap();
         for blob in &sim.mailbox {
             assert!(mallory.handle_blob(blob).0.is_empty());
         }
@@ -782,19 +955,41 @@ mod tests {
     }
 
     #[test]
-    fn out_of_order_and_skipped_messages() {
+    fn out_of_order_and_never_twice() {
         let (mut sim, sec) = Sim::new();
         let a = sim.join("alice", &sec);
         let b = sim.join("bob", &sec);
         let (_, m1) = sim.clients[a].0.send_text("one").unwrap();
         let (_, m2) = sim.clients[a].0.send_text("two").unwrap();
-        // Deliver m2 before m1.
-        let (ev2, _) = sim.clients[b].0.handle_blob(&m2);
-        let (ev1, _) = sim.clients[b].0.handle_blob(&m1);
+        let (ev2, _) = sim.clients[b].0.handle_blob(&m2[0]);
+        let (ev1, _) = sim.clients[b].0.handle_blob(&m1[0]);
         assert!(matches!(&ev2[0], Event::Message { text, .. } if text == "two"));
         assert!(matches!(&ev1[0], Event::Message { text, .. } if text == "one"));
-        // And never twice.
-        assert!(sim.clients[b].0.handle_blob(&m1).0.is_empty());
+        assert!(sim.clients[b].0.handle_blob(&m1[0]).0.is_empty());
+    }
+
+    #[test]
+    fn safety_numbers_match_on_both_sides() {
+        let (mut sim, sec) = Sim::new();
+        let a = sim.join("alice", &sec);
+        let b = sim.join("bob", &sec);
+        let sa = &sim.clients[a].0.member_details()[0].safety_number;
+        let sb = &sim.clients[b].0.member_details()[0].safety_number;
+        assert_eq!(sa, sb);
+        assert_eq!(sa.replace(' ', "").len(), 60);
+    }
+
+    #[test]
+    fn old_version_blob_is_reported_once() {
+        let (mut sim, sec) = Sim::new();
+        let a = sim.join("alice", &sec);
+        // A v1-style blob: right room key, no "G2" magic.
+        let padded = crypto::pad(&[0u8, 1, 2, 3]).unwrap();
+        let (n, ct) = crypto::seal(&sec.room_key, b"ghostline/v1/outer", &padded);
+        let blob = [n.to_vec(), ct].concat();
+        let (ev, _) = sim.clients[a].0.handle_blob(&blob);
+        assert_eq!(ev, vec![Event::OutdatedPeer]);
+        assert!(sim.clients[a].0.handle_blob(&blob).0.is_empty());
     }
 
     #[test]
@@ -804,6 +999,6 @@ mod tests {
         let _b = sim.join("bob", &sec);
         let (_, short) = sim.clients[a].0.send_text("hi").unwrap();
         let (_, longer) = sim.clients[a].0.send_text(&"x".repeat(60)).unwrap();
-        assert_eq!(short.len(), longer.len());
+        assert_eq!(short[0].len(), longer[0].len());
     }
 }

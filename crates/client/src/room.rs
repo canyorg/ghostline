@@ -94,7 +94,7 @@ impl Room {
             relay,
             route,
         } = prepared;
-        let session = Session::new(nick, &secrets);
+        let session = Session::new(nick, &secrets)?;
         let hello = session.hello_blob()?;
         let poll = match route {
             Route::Direct => Duration::from_millis(700),
@@ -125,6 +125,11 @@ impl Room {
     /// Other active members.
     pub fn members(&self) -> Vec<String> {
         self.session.members()
+    }
+
+    /// Other active members with their Signal safety numbers.
+    pub fn member_details(&self) -> Vec<ghostline_core::MemberInfo> {
+        self.session.member_details()
     }
 
     /// Drain network events, run them through the session, return UI events.
@@ -177,8 +182,16 @@ impl Room {
 
     /// Encrypt and send a message. Returns its id (track it for ✓/✓✓).
     pub fn send_text(&mut self, text: &str) -> Result<MsgId> {
-        let (id, blob) = self.session.send_text(text)?;
-        let _ = self.tx.send(NetCmd::Post(blob, PostTag::Msg(id)));
+        let (id, blobs) = self.session.send_text(text)?;
+        let last = blobs.len().saturating_sub(1);
+        for (i, blob) in blobs.into_iter().enumerate() {
+            let tag = if i == last {
+                PostTag::Msg(id)
+            } else {
+                PostTag::Other
+            };
+            let _ = self.tx.send(NetCmd::Post(blob, tag));
+        }
         Ok(id)
     }
 

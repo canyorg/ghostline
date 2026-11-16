@@ -119,6 +119,9 @@ pub struct T {
     pub retry: &'static str,
     pub waiting_tor: &'static str,
     pub relay_hint: &'static str,
+    pub outdated: &'static str,
+    pub safety_number: &'static str,
+    pub safety_hint: &'static str,
 }
 
 pub static EN: T = T {
@@ -188,6 +191,9 @@ pub static EN: T = T {
     retry: "Retry",
     waiting_tor: "Waiting for Tor…",
     relay_hint: "your relay's .onion address",
+    outdated: "Someone in this room uses an older GhostLine version — they must update.",
+    safety_number: "Safety number",
+    safety_hint: "Compare it with that person in person or by phone. Same number on both screens = nobody in between.",
 };
 
 pub static TR: T = T {
@@ -257,6 +263,9 @@ pub static TR: T = T {
     retry: "Tekrar dene",
     waiting_tor: "Tor bekleniyor…",
     relay_hint: "relay'inin .onion adresi",
+    outdated: "Bu odada eski bir GhostLine sürümü kullanan biri var — güncellemesi gerekiyor.",
+    safety_number: "Güvenlik numarası",
+    safety_hint: "Bu numarayı o kişiyle yüz yüze ya da telefonda karşılaştır. İki ekranda aynıysa arada kimse yok.",
 };
 
 pub static RU: T = T {
@@ -326,6 +335,9 @@ pub static RU: T = T {
     retry: "Повторить",
     waiting_tor: "Ожидание Tor…",
     relay_hint: "адрес .onion твоего relay",
+    outdated: "Кто-то в комнате использует старую версию GhostLine — нужно обновиться.",
+    safety_number: "Код безопасности",
+    safety_hint: "Сверь его с этим человеком лично или по телефону. Одинаковый код на обоих экранах = посередине никого нет.",
 };
 
 pub static DE: T = T {
@@ -395,4 +407,7 @@ pub static DE: T = T {
     retry: "Erneut versuchen",
     waiting_tor: "Warte auf Tor…",
     relay_hint: ".onion-Adresse deines Relays",
+    outdated: "Jemand in diesem Raum nutzt eine ältere GhostLine-Version — bitte aktualisieren.",
+    safety_number: "Sicherheitsnummer",
+    safety_hint: "Vergleiche sie mit dieser Person persönlich oder am Telefon. Gleiche Nummer auf beiden Bildschirmen = niemand dazwischen.",
 };

@@ -10,8 +10,9 @@
 //!
 //! Milestone M2 (v0):
 //! - [`crypto`]  — XChaCha20-Poly1305, HKDF, size padding
-//! - [`proto`]   — wire format, Ed25519-signed envelopes
-//! - [`session`] — sans-IO room state machine: Sender-Keys ratchet, receipts, re-key, burn
+//! - [`proto`]   — wire format (protocol v2)
+//! - [`session`] — sans-IO room state machine on **libsignal**: PQXDH + Double Ratchet
+//!   pairwise sessions, Sender Keys for groups, receipts, re-keying, safety numbers, burn
 //!
 //! See `docs/ARCHITECTURE.md`.
 
@@ -31,7 +32,7 @@ pub use error::Error;
 pub use kdf::{KdfParams, RoomSecrets};
 pub use nickname::Nickname;
 pub use room_id::RoomId;
-pub use session::{Event, Session, Status};
+pub use session::{Event, MemberInfo, Session, Status};
 
 use zeroize::Zeroizing;
 
