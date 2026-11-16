@@ -1,0 +1,10 @@
+[package]
+name = "ghostline-relay"
+description = "GhostLine relay: onion-only store-and-forward for encrypted blobs. Sees no IPs, no user agents, no nicknames."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
