@@ -1,25 +1,67 @@
-name: Windows exe (latest main)
+name: Latest build (main)
 
-# Builds the Windows binaries on every push to main and keeps them as a downloadable
-# workflow artifact (Actions → this run → Artifacts), without needing a release tag.
+# On every push to main: build Linux + Windows binaries and publish them to the
+# public "latest" pre-release (no login needed to download).
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p ghostline-gui -p ghostline -p ghostline-relay
+      - run: cargo build --release --target ${{ matrix.target }} -p ghostline-gui -p ghostline -p ghostline-relay
+      - name: Package
+        shell: bash
+        run: |
+          mkdir dist
+          for b in ghostline-gui ghostline ghostline-relay; do
+            cp "target/${{ matrix.target }}/release/$b${{ matrix.ext }}" "dist/$b-${{ matrix.target }}${{ matrix.ext }}"
+          done
+          cd dist && sha256sum * > SHA256SUMS-${{ matrix.target }}.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: ghostline-windows-${{ github.sha }}
-          path: |
-            target/release/ghostline-gui.exe
-            target/release/ghostline.exe
-            target/release/ghostline-relay.exe
-          retention-days: 30
+          name: dist-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Move the "latest" tag to this commit
+        run: |
+          git tag -f latest
+          git push -f origin refs/tags/latest
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "GhostLine — latest build (main)"
+          prerelease: true
+          make_latest: false
+          body: |
+            Automatic build of the newest code on `main` (${{ github.sha }}).
+            Built-in Tor included. Windows: download **ghostline-gui-x86_64-pc-windows-msvc.exe**.
+            If SmartScreen warns: *More info → Run anyway*. Verify with SHA256SUMS.
+          files: dist/*
+          overwrite_files: true
