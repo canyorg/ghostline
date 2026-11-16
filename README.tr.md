@@ -308,7 +308,7 @@ yenisini verir) → oda ID'si ve parola kopyalama butonlarıyla gösterilir → 
 
 Oda içinde: 👥 üyeler, oda bilgisi (ID ve parolayı tekrar paylaşmak için), **Çık** ve
 **🔥 ODAYI SİL**: 1,5 saniye basılı tutunca oda herkes için anında yok olur. Relay ve Tor ayarları
-başlangıç ekranındaki **Ağ** bölümünde. Dil sistem dilini takip eder (TR/EN/RU), aynı ekrandan
+başlangıç ekranındaki **Ağ** bölümünde. Dil sistem dilini takip eder (TR/EN/RU/DE), aynı ekrandan
 değiştirilebilir.
 
 <p align="center"><img src="docs/img/home.png" width="400"> <img src="docs/img/created.png" width="400"></p>
@@ -420,7 +420,7 @@ Bir güvenlik aracı neyi **yapamadığını** açıkça söylemeli:
 - [x] **M3** Relay: sadece RAM, log yok, TTL, anında silme ve kalıcı silinme kaydı (tombstone)
 - [x] **CLI** Linux ve Windows terminal istemcisi, SOCKS ile Tor
 - [x] **M6a** Odayı yakma
-- [x] **M5** Masaüstü uygulaması (Linux + Windows): matrix arayüzü, balonlar, ✔/✔✔, basılı tutarak silme, Windows'ta ekran yakalama engeli, TR/EN/RU
+- [x] **M5** Masaüstü uygulaması (Linux + Windows): matrix arayüzü, balonlar, ✔/✔✔, basılı tutarak silme, Windows'ta ekran yakalama engeli, TR/EN/RU/DE
 - [ ] **M2b** `libsignal` (PQXDH + Double Ratchet)
 - [x] **M4a** Yerleşik Tor (Arti): oda başına ayrı devre, 10 dakikada bir devre yenileme, iz bırakmayan mod
 - [ ] **M4b** Tor'un engellendiği ülkeler için köprüler (bridges)
