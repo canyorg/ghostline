@@ -9,7 +9,7 @@ use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, Frame, Key, Layout, Margin, RichText, ScrollArea,
     Sense, Stroke, TextEdit, Vec2,
 };
-use ghostline_client::{setup, NetConfig, Prepared, Room, RoomEvent};
+use ghostline_client::{setup, EmbeddedTor, NetConfig, Prepared, Room, RoomEvent, TorMode};
 use ghostline_core::proto::MsgId;
 use ghostline_core::{password, Event, Nickname, RoomId, Status};
 use zeroize::Zeroizing;
@@ -20,11 +20,32 @@ use crate::theme::*;
 
 const BURN_HOLD: Duration = Duration::from_millis(1500);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TorChoice {
+    Builtin,
+    External,
+    Off,
+}
+
+/// Shared state of the built-in Tor client.
+#[derive(Default)]
+struct TorStatus {
+    started: bool,
+    progress: f32,
+    ready: Option<Arc<EmbeddedTor>>,
+    error: Option<String>,
+}
+
+type SharedTor = Arc<std::sync::Mutex<TorStatus>>;
+
 pub struct GhostApp {
     rt: tokio::runtime::Runtime,
     lang: Lang,
-    net: NetConfig,
-    tor_port_text: String,
+    relay: String,
+    tor_choice: TorChoice,
+    ext_port_text: String,
+    allow_direct: bool,
+    tor: SharedTor,
     read_receipts: bool,
     screen: Screen,
     rain: Rain,
@@ -186,16 +207,16 @@ impl GhostApp {
             .enable_all()
             .build()
             .expect("tokio runtime");
-        let net = NetConfig {
-            relay: std::env::var("GHOSTLINE_RELAY")
-                .unwrap_or_else(|_| "http://127.0.0.1:7878".into()),
-            ..NetConfig::default()
-        };
+        let relay =
+            std::env::var("GHOSTLINE_RELAY").unwrap_or_else(|_| "http://127.0.0.1:7878".into());
         GhostApp {
             rt,
             lang: Lang::detect(),
-            tor_port_text: net.tor_port.to_string(),
-            net,
+            relay,
+            tor_choice: TorChoice::Builtin,
+            ext_port_text: "9150".into(),
+            allow_direct: false,
+            tor: Arc::new(std::sync::Mutex::new(TorStatus::default())),
             read_receipts: true,
             screen: Screen::Home,
             rain: Rain::new(),
@@ -218,6 +239,112 @@ impl GhostApp {
             ui.ctx().copy_text(value.to_owned());
             self.copied = Some((key, Instant::now()));
         }
+    }
+
+    /// Network config as currently set in the UI (embedded Tor filled in if ready).
+    fn net(&self) -> NetConfig {
+        let tor = match self.tor_choice {
+            TorChoice::Builtin => TorMode::Embedded,
+            TorChoice::External => TorMode::External(format!(
+                "socks5h://127.0.0.1:{}",
+                self.ext_port_text.trim().parse::<u16>().unwrap_or(9150)
+            )),
+            TorChoice::Off => TorMode::Off,
+        };
+        NetConfig {
+            relay: self.relay.trim().to_string(),
+            tor,
+            allow_direct: self.allow_direct && self.tor_choice == TorChoice::Off,
+            embedded: self.tor.lock().unwrap().ready.clone(),
+        }
+    }
+
+    /// Start the built-in Tor in the background once it is needed.
+    fn ensure_tor(&mut self, ctx: &egui::Context) {
+        if !self.net().needs_embedded_tor() {
+            return;
+        }
+        let mut st = self.tor.lock().unwrap();
+        if st.started {
+            return;
+        }
+        *st = TorStatus {
+            started: true,
+            ..Default::default()
+        };
+        drop(st);
+        let (shared, h, c) = (self.tor.clone(), self.rt.handle().clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let (s2, c2) = (shared.clone(), c.clone());
+            let progress: ghostline_client::tor::Progress = Arc::new(move |f, _m| {
+                s2.lock().unwrap().progress = f;
+                c2.request_repaint();
+            });
+            let r = setup::start_tor(&h, progress);
+            let mut st = shared.lock().unwrap();
+            match r {
+                Ok(t) => {
+                    st.ready = Some(t);
+                    st.progress = 1.0;
+                }
+                Err(e) => st.error = Some(format!("{e:#}")),
+            }
+            c.request_repaint();
+        });
+    }
+
+    /// One-line network / Tor status.
+    fn tor_line(&mut self, ui: &mut egui::Ui) {
+        let t = self.t();
+        if !self.net().needs_embedded_tor() {
+            let (txt, col) = match self.net().route() {
+                Ok(r) => (format!("● {}", r.label()), DIM),
+                Err(e) => (format!("✖ {e}"), AMBER),
+            };
+            ui.label(RichText::new(txt).small().color(col));
+            return;
+        }
+        let (progress, ready, error) = {
+            let st = self.tor.lock().unwrap();
+            (st.progress, st.ready.is_some(), st.error.clone())
+        };
+        ui.horizontal_wrapped(|ui| {
+            if ready {
+                ui.label(
+                    RichText::new(format!("🧅 {} · {}", t.tor_ready, t.tor_builtin))
+                        .small()
+                        .color(GREEN),
+                );
+            } else if let Some(e) = error {
+                ui.label(
+                    RichText::new(format!("✖ {}: {e}", t.tor_failed))
+                        .small()
+                        .color(RED),
+                );
+                if ui.small_button(t.retry).clicked() {
+                    *self.tor.lock().unwrap() = TorStatus::default();
+                }
+            } else {
+                ui.spinner();
+                ui.add(
+                    egui::ProgressBar::new(progress)
+                        .desired_width(160.0)
+                        .text(format!("{:.0}%", progress * 100.0)),
+                );
+                ui.label(RichText::new(t.tor_connecting).small().color(MID));
+            }
+        });
+    }
+
+    fn relay_field(&mut self, ui: &mut egui::Ui) {
+        let t = self.t();
+        ui.label(t.relay);
+        ui.add(
+            TextEdit::singleline(&mut self.relay)
+                .hint_text(t.relay_hint)
+                .desired_width(f32::INFINITY),
+        );
+        self.tor_line(ui);
     }
 
     // ───────────────────────────── Home ─────────────────────────────
@@ -248,8 +375,9 @@ impl GhostApp {
                                 error: None,
                             }));
                         }
-                        ui.add_space(14.0);
+                        ui.add_space(10.0);
                     });
+                    self.tor_line(ui);
                     egui::CollapsingHeader::new(RichText::new(t.network).color(DIM))
                         .default_open(false)
                         .show(ui, |ui| self.network_settings(ui));
@@ -285,34 +413,39 @@ impl GhostApp {
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
                 ui.label(t.relay);
-                ui.add(TextEdit::singleline(&mut self.net.relay).desired_width(320.0));
+                ui.add(
+                    TextEdit::singleline(&mut self.relay)
+                        .hint_text(t.relay_hint)
+                        .desired_width(340.0),
+                );
                 ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut self.net.tor, t.use_tor);
-                ui.end_row();
-                ui.label(t.tor_port);
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(TextEdit::singleline(&mut self.tor_port_text).desired_width(60.0))
-                        .changed()
-                    {
-                        if let Ok(p) = self.tor_port_text.trim().parse() {
-                            self.net.tor_port = p;
+                ui.label(t.tor_mode);
+                ui.vertical(|ui| {
+                    ui.radio_value(&mut self.tor_choice, TorChoice::Builtin, t.tor_builtin);
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.tor_choice, TorChoice::External, t.tor_external);
+                        if self.tor_choice == TorChoice::External {
+                            ui.add(
+                                TextEdit::singleline(&mut self.ext_port_text).desired_width(50.0),
+                            );
                         }
+                    });
+                    if self.tor_choice == TorChoice::External {
+                        ui.label(RichText::new(t.tor_hint).small().color(DIM));
                     }
-                    ui.label(RichText::new(t.tor_hint).small().color(DIM));
+                    ui.radio_value(&mut self.tor_choice, TorChoice::Off, t.tor_off);
+                    if self.tor_choice == TorChoice::Off {
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.allow_direct, t.allow_direct);
+                            if self.allow_direct {
+                                ui.label(RichText::new(t.allow_direct_warn).small().color(RED));
+                            }
+                        });
+                    }
                 });
                 ui.end_row();
                 ui.label("");
                 ui.checkbox(&mut self.read_receipts, t.read_receipts);
-                ui.end_row();
-                ui.label("");
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.net.no_tor, t.allow_direct);
-                    if self.net.no_tor {
-                        ui.label(RichText::new(t.allow_direct_warn).small().color(RED));
-                    }
-                });
                 ui.end_row();
             });
     }
@@ -411,6 +544,8 @@ impl GhostApp {
                         }
                     }
 
+                    ui.add_space(8.0);
+                    self.relay_field(ui);
                     if let Some(e) = &f.error {
                         ui.add_space(6.0);
                         ui.label(RichText::new(format!("✖ {e}")).color(RED));
@@ -467,14 +602,18 @@ impl GhostApp {
         } else {
             f.suggestion.clone()
         };
-        if let Err(e) = self.net.route() {
-            f.error = Some(e.to_string());
-            return Screen::Create(f);
+        let cfg = self.net();
+        if !cfg.needs_embedded_tor() {
+            if let Err(e) = cfg.route() {
+                f.error = Some(e.to_string());
+                return Screen::Create(f);
+            }
         }
         let (tx, rx) = mpsc::channel();
-        let (h, cfg, c) = (self.rt.handle().clone(), self.net.clone(), ctx.clone());
+        let (h, c, tor) = (self.rt.handle().clone(), ctx.clone(), self.tor.clone());
         std::thread::spawn(move || {
-            let r = setup::create_room(&h, &cfg, Some(pw.as_str()));
+            let r = wait_for_tor(cfg, &tor)
+                .and_then(|cfg| setup::create_room(&h, &cfg, Some(pw.as_str())));
             let _ = tx.send(r);
             c.request_repaint();
         });
@@ -547,6 +686,8 @@ impl GhostApp {
                             .desired_width(f32::INFINITY),
                     );
                     nick_hint(ui, &f.nick, t);
+                    ui.add_space(8.0);
+                    self.relay_field(ui);
 
                     if let Some(e) = &f.error {
                         ui.add_space(6.0);
@@ -596,19 +737,22 @@ impl GhostApp {
                 return Screen::Join(f);
             }
         };
-        if let Err(e) = self.net.route() {
-            f.error = Some(e.to_string());
-            return Screen::Join(f);
+        let cfg = self.net();
+        if !cfg.needs_embedded_tor() {
+            if let Err(e) = cfg.route() {
+                f.error = Some(e.to_string());
+                return Screen::Join(f);
+            }
         }
         let (tx, rx) = mpsc::channel();
-        let (h, cfg, c, pw) = (
+        let (h, c, pw, tor) = (
             self.rt.handle().clone(),
-            self.net.clone(),
             ctx.clone(),
             f.pw.clone(),
+            self.tor.clone(),
         );
         std::thread::spawn(move || {
-            let r = setup::join_room(&h, &cfg, id, pw);
+            let r = wait_for_tor(cfg, &tor).and_then(|cfg| setup::join_room(&h, &cfg, id, pw));
             let _ = tx.send(r);
             c.request_repaint();
         });
@@ -652,22 +796,29 @@ impl GhostApp {
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 card().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(RichText::new(t.working).color(GREEN));
-                    });
-                    ui.label(
-                        RichText::new(format!("via {}", self.route_label()))
-                            .small()
-                            .color(DIM),
-                    );
+                    let tor_pending =
+                        self.net().needs_embedded_tor() && self.tor.lock().unwrap().ready.is_none();
+                    if tor_pending {
+                        ui.label(RichText::new(t.waiting_tor).color(GREEN));
+                        self.tor_line(ui);
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(RichText::new(t.working).color(GREEN));
+                        });
+                        ui.label(
+                            RichText::new(format!("via {}", self.route_label()))
+                                .small()
+                                .color(DIM),
+                        );
+                    }
                 });
             });
         Screen::Working(w)
     }
 
     fn route_label(&self) -> String {
-        self.net
+        self.net()
             .route()
             .map(|r| r.label())
             .unwrap_or_else(|e| e.to_string())
@@ -1129,6 +1280,26 @@ impl GhostApp {
     }
 }
 
+/// Block a worker thread until the built-in Tor is ready (if this config needs it).
+fn wait_for_tor(mut cfg: NetConfig, tor: &SharedTor) -> anyhow::Result<NetConfig> {
+    if !cfg.needs_embedded_tor() {
+        return Ok(cfg);
+    }
+    loop {
+        {
+            let st = tor.lock().unwrap();
+            if let Some(t) = &st.ready {
+                cfg.embedded = Some(t.clone());
+                return Ok(cfg);
+            }
+            if let Some(e) = &st.error {
+                anyhow::bail!("Tor: {e}");
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 fn nick_hint(ui: &mut egui::Ui, nick: &str, t: &T) {
     if nick.is_empty() {
         ui.label(RichText::new(t.nick_rule).small().color(DIM));
@@ -1269,6 +1440,7 @@ impl eframe::App for GhostApp {
             .paint(&painter, rect, dt, if in_chat { 0.16 } else { 0.6 });
         matrix::schedule(&ctx);
 
+        self.ensure_tor(&ctx);
         let screen = std::mem::replace(&mut self.screen, Screen::Home);
         self.screen = match screen {
             Screen::Home => {

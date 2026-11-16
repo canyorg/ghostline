@@ -98,7 +98,7 @@ impl Room {
         let hello = session.hello_blob()?;
         let poll = match route {
             Route::Direct => Duration::from_millis(700),
-            Route::Socks(_) => Duration::from_millis(1500),
+            Route::Socks(_) | Route::Embedded(_) => Duration::from_millis(1500),
         };
         let (tx, rx) = spawn_network(rt, Arc::new(relay), poll, notify);
         let _ = tx.send(NetCmd::Post(hello, PostTag::Other));

@@ -1,8 +1,8 @@
 //! GhostLine desktop app (Linux, Windows).
 //!
 //! Pure Rust (egui): no web view, no JavaScript, no HTML — message text is only
-//! ever drawn as plain text. Nothing is written to disk: no settings file, no
-//! history, no cache.
+//! ever drawn as plain text. No messages, settings or history are written to disk;
+//! only the built-in Tor keeps its guard/directory state (`GHOSTLINE_AMNESIC=1` → none).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 

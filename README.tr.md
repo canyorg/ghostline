@@ -135,7 +135,7 @@ sanal makinede Tor ve kullanımdan sonra geri dönebileceğin bir snapshot.
 | | |
 |---|---|
 | 🔐 **Uçtan uca şifreleme** | **Şu an:** Signal'in grup yöntemi *Sender Keys*. Her üyenin ileri yönde değişen bir anahtar zinciri var (forward secrecy), anahtarlar X25519 ile kişiye özel dağıtılıyor, her mesaj Ed25519 ile imzalanıyor ve biri ayrılınca herkes anahtar yeniliyor. XChaCha20-Poly1305 ve HKDF-SHA256 kullanılıyor. **Sırada:** tam `libsignal` (PQXDH + Double Ratchet). |
-| 🧅 **Sadece Tor üzerinden** | **Şu an:** trafiği Tor'un üzerinden geçirir (`--tor`) ve uzaktaki bir relay'e Tor olmadan bağlanmayı reddeder. Relay bir `.onion` servisi, yani yol 6 atlamalı ve sunucu hiçbir IP görmez. **Sırada:** Arti ile uygulamaya gömülü Tor ve belirli aralıklarla değişen devreler. |
+| 🧅 **Yerleşik Tor** | Tor **uygulamanın içinde** (Arti, Tor Project'in Rust ile yazdığı Tor). Tor Browser'a ya da tor servisine gerek yok: uygulamayı açtığında Tor'a kendisi bağlanır. Her odanın devreleri ayrıdır ve devreler 10 dakikada bir yenilenir. Relay bir `.onion` servisi, yani yol 6 atlamalı, çıkış düğümü yok ve sunucu hiçbir IP görmez. Uzaktaki bir relay'e Tor'suz asla bağlanılmaz. İstersen harici Tor da (Tor Browser / tor servisi) kullanabilirsin. |
 | 👻 **Sıfır metadata** | Hesap, IP, user agent ve kişi listesi yok. Relay, rastgele bir posta kutusu adresinde yalnızca dolgulu şifreli veriyi RAM'de tutar. Takma adlar sadece şifreli içeriğin içinde bulunur. |
 | 🔢 **Sayısal oda ID'si** | Kripto cüzdanı veya Mullvad hesap numarası gibi: 16–23 hane, **uzunluğu her seferinde rastgele**. Damm kontrol hanesi, tek hanelik her yazım hatasını ve yan yana iki hanenin her yer değiştirmesini yakalar. |
 | 🔑 **Oda parolası** | Kendi parolanı belirleyebilir ya da otomatik ürettirebilirsin. **"Şifre öner"** 16 karakterden uzun rastgele bir parola üretir (varsayılan ~123 bit). ID ve parola hiç değişmez. |
@@ -144,7 +144,7 @@ sanal makinede Tor ve kullanımdan sonra geri dönebileceğin bir snapshot.
 | 🚫 **Ekran görüntüsü koruması** | Windows'ta masaüstü uygulaması ekran görüntüsünde, ekran kaydında ve ekran paylaşımında görünmez. Linux'ta ve terminal istemcisinde bu mümkün değil, sınırlamalara bak. |
 | 💥 **Odayı yak** | `/burn`: relay posta kutusunu anında siler (bir daha oluşturulamaz) ve tüm üyelerin istemcileri anahtarları siler. |
 | 🟩 **Hacker arayüzü** | Matrix yağmurlu, mesaj balonlu, basılı tutunca silen **masaüstü uygulaması** (Linux + Windows). Türkçe, İngilizce ve Rusça. Yanında siyah üzerine yeşil **terminal istemcisi** de var ve ikisi birbiriyle konuşabiliyor. |
-| 🧱 **Web motoru yok** | Masaüstü uygulaması saf Rust (egui): WebView, JavaScript ve HTML yok. Mesajlar her zaman düz metin olarak çizilir, diske hiçbir şey yazılmaz. |
+| 🧱 **Web motoru yok** | Masaüstü uygulaması saf Rust (egui): WebView, JavaScript ve HTML yok. Mesajlar her zaman düz metin olarak çizilir. Diske mesaj, ayar veya geçmiş yazılmaz; Tor Browser'daki gibi sadece Tor'un guard/dizin bilgisi tutulur (`GHOSTLINE_AMNESIC=1` ile hiçbir şey). |
 
 ## Hızlı başlangıç
 
@@ -216,13 +216,20 @@ Oda içindeki komutlar: `/help` · `/who` · `/info` · `/quit` (Ctrl+C) · `/bu
    ./target/release/ghostline-relay              # 127.0.0.1'de kalır
    ```
 
-2. **İstemcilerde** Tor'un çalışıyor olması gerekir. Linux'ta: `sudo dnf install tor && sudo systemctl start tor`
-   (port 9050). Windows'ta veya Linux'ta **Tor Browser**'ı açman da yeterli (port 9150).
+2. **İstemcilerde ek bir şey gerekmez.** Tor uygulamanın içinde. `.onion` adresini masaüstü
+   uygulamasında **Relay** alanına yapıştır, terminalde `--relay` ile ver. İlk açılışta Tor'un
+   bağlanması 10–60 saniye sürer (ilerleme çubuğu görünür), sonraki açılışlar daha hızlıdır.
 
    ```bash
    ghostline create --relay http://abcd…xyz.onion
-   ghostline join <ID> --relay http://abcd…xyz.onion --tor-port 9150   # Tor Browser ile
+   ghostline join <ID> --relay http://abcd…xyz.onion
+   ghostline join <ID> --relay http://abcd…xyz.onion --external-tor --tor-port 9150   # Tor Browser kullanmak istersen
    ```
+
+   Yerleşik Tor, Tor Browser gibi giriş (guard) relay'lerini ve bir dizin önbelleğini hatırlar
+   (`~/.local/share/ghostline/arti`, Windows'ta `%LOCALAPPDATA%\ghostline\arti`). Sabit giriş
+   relay'leri seni korelasyona karşı **korur**. Hiç iz bırakmamak istersen `GHOSTLINE_AMNESIC=1`
+   ayarla: Tor geçici bir klasör kullanır ve çıkışta siler.
 
    İpucu: `export GHOSTLINE_RELAY=http://abcd…xyz.onion` (PowerShell: `$env:GHOSTLINE_RELAY="…"`).
 
@@ -284,7 +291,8 @@ Bir güvenlik aracı neyi **yapamadığını** açıkça söylemeli:
 - [x] **M6a** Odayı yakma
 - [x] **M5** Masaüstü uygulaması (Linux + Windows): matrix arayüzü, balonlar, ✔/✔✔, basılı tutarak silme, Windows'ta ekran yakalama engeli, TR/EN/RU
 - [ ] **M2b** `libsignal` (PQXDH + Double Ratchet)
-- [ ] **M4** Gömülü Tor (Arti): devre değişimi, akış izolasyonu, köprüler
+- [x] **M4a** Yerleşik Tor (Arti): oda başına ayrı devre, 10 dakikada bir devre yenileme, iz bırakmayan mod
+- [ ] **M4b** Tor'un engellendiği ülkeler için köprüler (bridges)
 - [ ] **M6b** Panik silme, isteğe bağlı şifreli yerel geçmiş
 - [ ] **M7** Android
 - [ ] **M8** Bağımsız güvenlik denetimi

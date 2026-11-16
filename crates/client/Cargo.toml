@@ -15,3 +15,13 @@ zeroize.workspace = true
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks"] }
 url = "2"
+arti-client = { version = "0.48", default-features = false, features = ["tokio", "rustls", "compression", "onion-service-client", "vanguards", "static-sqlite"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+http = "1"
+futures = "0.3"
+tor-rtcompat = { version = "0.48", default-features = false, features = ["tokio", "rustls"] }
+dirs = "7"
+rand.workspace = true

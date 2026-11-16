@@ -17,6 +17,6 @@
 **Windows SmartScreen:** the .exe is not code-signed, so Windows may say *"Windows protected your PC"* → **More info → Run anyway**. Verify the SHA-256 first:
 `Get-FileHash .\ghostline-gui-x86_64-pc-windows-msvc.exe -Algorithm SHA256`
 
-**Tor:** for an `.onion` relay keep **Tor Browser** open and set the Tor port to **9150** under *Network / Ağ / Сеть*.
+**Tor is built in** — just paste the relay's `.onion` address into the Relay field. / Tor uygulamanın içinde, sadece relay'in `.onion` adresini Relay alanına yapıştır. / Tor встроен — просто вставь адрес `.onion` в поле Relay.
 
 **Max OPSEC:** prefer the Linux build inside a Fedora/Kali VM behind Mullvad (see README).

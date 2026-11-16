@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
-use ghostline_client::{setup, NetConfig, Prepared, Room};
+use ghostline_client::{setup, NetConfig, Prepared, Room, TorMode};
 use ghostline_core::{password, Nickname, RoomId};
 use zeroize::Zeroizing;
 
@@ -63,16 +63,16 @@ struct NetArgs {
     /// Relay URL (an .onion address in real use)
     #[arg(long, env = "GHOSTLINE_RELAY", default_value = "http://127.0.0.1:7878")]
     relay: String,
-    /// Route through Tor (SOCKS on 127.0.0.1:<tor-port>). Automatic for .onion relays.
+    /// Use an already-running Tor instead of the built-in one (SOCKS on 127.0.0.1:<tor-port>)
     #[arg(long)]
-    tor: bool,
-    /// Tor SOCKS port: 9050 = tor service, 9150 = Tor Browser
+    external_tor: bool,
+    /// SOCKS port of the external Tor: 9050 = tor service, 9150 = Tor Browser
     #[arg(long, default_value_t = 9050)]
     tor_port: u16,
-    /// Custom SOCKS proxy, e.g. socks5h://127.0.0.1:9150
+    /// Custom SOCKS proxy, e.g. socks5h://127.0.0.1:9150 (implies external Tor)
     #[arg(long)]
     proxy: Option<String>,
-    /// Allow a direct (non-Tor) connection to a non-local relay. Exposes your IP!
+    /// No Tor at all; allow a direct connection to a non-local relay. Exposes your IP!
     #[arg(long)]
     no_tor: bool,
     /// Do not send read receipts (others will never see the cyan ✓✓)
@@ -121,14 +121,51 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
 
 impl NetArgs {
     fn config(&self) -> NetConfig {
+        let tor = if self.no_tor {
+            TorMode::Off
+        } else if let Some(p) = &self.proxy {
+            TorMode::External(p.clone())
+        } else if self.external_tor {
+            TorMode::External(format!("socks5h://127.0.0.1:{}", self.tor_port))
+        } else {
+            TorMode::Embedded
+        };
         NetConfig {
             relay: self.relay.clone(),
-            tor: self.tor,
-            tor_port: self.tor_port,
-            proxy: self.proxy.clone(),
-            no_tor: self.no_tor,
+            tor,
+            allow_direct: self.no_tor,
+            embedded: None,
         }
     }
+}
+
+/// Start the built-in Tor if this config needs it, with a progress line.
+fn ensure_tor(rt: &tokio::runtime::Runtime, cfg: &mut NetConfig) -> Result<()> {
+    if !cfg.needs_embedded_tor() {
+        return Ok(());
+    }
+    let last = Arc::new(std::sync::Mutex::new(-1i32));
+    let progress: ghostline_client::tor::Progress = Arc::new(move |f: f32, _msg: String| {
+        let pct = (f * 100.0) as i32;
+        let mut l = last.lock().unwrap();
+        if pct != *l {
+            *l = pct;
+            print!("\r\x1b[92m> connecting to Tor (built-in)… {pct:3}%\x1b[0m");
+            let _ = io::stdout().flush();
+        }
+    });
+    let tor = setup::start_tor(rt.handle(), progress)?;
+    println!();
+    cfg.embedded = Some(tor);
+    Ok(())
+}
+
+/// Validate the network settings before asking for passwords.
+fn precheck(cfg: &NetConfig) -> Result<()> {
+    if cfg.needs_embedded_tor() {
+        return Ok(()); // Tor will be started later
+    }
+    cfg.route().map(|_| ())
 }
 
 fn working(cfg: &NetConfig) -> Result<()> {
@@ -142,8 +179,8 @@ fn working(cfg: &NetConfig) -> Result<()> {
 }
 
 fn create(nick: Option<String>, n: NetArgs) -> Result<()> {
-    let cfg = n.config();
-    cfg.route()?;
+    let mut cfg = n.config();
+    precheck(&cfg)?;
     let nick = ask_nick(nick)?;
     let pw = Zeroizing::new(rpassword::prompt_password(
         "password (Enter = generate a strong one, or type ≥12 chars): ",
@@ -160,6 +197,7 @@ fn create(nick: Option<String>, n: NetArgs) -> Result<()> {
     };
 
     let rt = runtime()?;
+    ensure_tor(&rt, &mut cfg)?;
     working(&cfg)?;
     let prepared = setup::create_room(rt.handle(), &cfg, user_pw)?;
 
@@ -190,12 +228,13 @@ fn create(nick: Option<String>, n: NetArgs) -> Result<()> {
 }
 
 fn join(id: Vec<String>, nick: Option<String>, n: NetArgs) -> Result<()> {
-    let cfg = n.config();
-    cfg.route()?;
+    let mut cfg = n.config();
+    precheck(&cfg)?;
     let id = RoomId::parse(&id.join(" ")).map_err(|e| anyhow::anyhow!("room id: {e}"))?;
     let pw = Zeroizing::new(rpassword::prompt_password("password: ")?);
     let nick = ask_nick(nick)?;
     let rt = runtime()?;
+    ensure_tor(&rt, &mut cfg)?;
     working(&cfg)?;
     let prepared = setup::join_room(rt.handle(), &cfg, id, pw)?;
     enter(rt, prepared, nick, &n)

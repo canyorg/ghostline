@@ -92,22 +92,27 @@ Ratchet) and rotate sender chains periodically, adding post-compromise security.
 - Anyone can run their own relay. The relay address is part of the room invite (optional
   field; defaults to the project relay).
 
-## 4. Transport (M4)
+## 4. Transport (M4a, implemented — `crates/client/src/tor.rs`, `net.rs`)
 
-- Arti is embedded as a library (`arti-client`), and the client has its own Tor instance.
-- **Stream isolation:** each room gets its own isolation token, so separate rooms never share a circuit.
-- **Rotation:** a new circuit every *N* minutes (default 10, configurable), on top of
-  Tor's own rotation.
-- HTTP over Tor uses a fixed, minimal request set: no `User-Agent`, no cookies and no
-  compression (to avoid leaking information through compressed sizes).
-- Bridges and pluggable transports (obfs4, snowflake) are available in settings.
+- Arti (`arti-client`, rustls, onion-service client, vanguards) runs **in-process**; no
+  Tor Browser or system tor needed. The GUI starts it in the background as soon as a
+  non-local relay is configured and shows bootstrap progress.
+- HTTP/1.1 (hyper) runs directly over Arti `DataStream`s to the `.onion` relay.
+- **Per-room isolation:** every `Relay` gets its own `isolated_client()`, so rooms never share circuits.
+- **Rotation:** every 10 minutes the room switches to a fresh isolated client (new circuits).
+- External Tor (SOCKS5h: 9050 tor service / 9150 Tor Browser) and direct mode remain
+  available. A non-local relay is never contacted without Tor unless explicitly allowed.
+- Requests carry no `User-Agent`, no cookies, no compression.
+- State: guard + directory cache in the user data dir (like Tor Browser). With
+  `GHOSTLINE_AMNESIC=1`, a temporary directory is used and deleted on exit.
+- Not yet: bridges / pluggable transports (M4b).
 
 ## 5. Desktop app (M5, implemented — `crates/gui`)
 
 - Pure Rust: egui/eframe with the glow (OpenGL) backend. There is no web view, no JS and no
   HTML parser, so there is no XSS-style attack surface: message text is only drawn as text.
-- No persistence: the eframe `persistence` feature is off, so nothing is written to disk
-  (no settings, history or cache).
+- No persistence of app data: the eframe `persistence` feature is off (no settings,
+  history or messages on disk). Only Tor's own state is kept, see §4.
 - **Screen-capture exclusion:** on Windows, `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)`.
   Linux cannot enforce this, so the app shows a warning.
 - Screens: start (CREATE CHAT / JOIN ROOM, network settings, EN/TR/RU), create (nickname,

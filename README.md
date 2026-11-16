@@ -138,7 +138,7 @@ snapshot you can roll back after use.
 | | |
 |---|---|
 | 🔐 **End-to-end encryption** | **Now:** Signal-style *Sender Keys*. Each member has a ratcheting chain (forward secrecy), keys are handed out pairwise over X25519, every message is Ed25519-signed, and everyone re-keys when someone leaves. Uses XChaCha20-Poly1305 and HKDF-SHA256. **Next:** full `libsignal` (PQXDH + Double Ratchet). |
-| 🧅 **Tor-only transport** | **Now:** routes through your Tor (`--tor`) and refuses a non-local relay without Tor. The relay is a `.onion` service, so the path has 6 hops and the server never sees an IP. **Next:** Tor embedded via Arti with timed circuit rotation. |
+| 🧅 **Built-in Tor** | Tor is **built into the app** (Arti, the Tor Project's Rust implementation). No Tor Browser and no tor service needed: open the app and it connects to Tor on its own. Each room gets its own isolated circuits, and circuits are replaced every 10 minutes. The relay is a `.onion` service, so the path has 6 hops, no exit node, and the server never sees an IP. A non-local relay is never contacted without Tor. You can still use an external Tor (Tor Browser / tor service). |
 | 👻 **Zero metadata** | No accounts, no IPs, no user agents, no contact lists. The relay stores only padded ciphertext under a random mailbox address, in RAM. Nicknames exist only inside encrypted payloads. |
 | 🔢 **Numeric room IDs** | Like a crypto wallet or a Mullvad account number: 16–23 digits with a **random length**. A Damm check digit catches every single-digit typo and every swap of two neighbouring digits. |
 | 🔑 **Room password** | Set your own, or get one generated automatically. **"Suggest password"** produces 16+ random characters (~123 bits by default). The ID and password never change. |
@@ -147,7 +147,7 @@ snapshot you can roll back after use.
 | 🚫 **Screenshot protection** | Desktop app on Windows: the window is excluded from screenshots, recordings and screen sharing. Linux and the terminal client cannot do this; see limitations. |
 | 💥 **Burn room** | `/burn`: the relay deletes the mailbox instantly (and tombstones it), and every member's client wipes its keys. |
 | 🟩 **Hacker UI** | **Desktop app** (Linux + Windows) with matrix rain, chat bubbles and hold-to-burn, in English, Turkish and Russian. Plus a green-on-black **terminal client**. Both talk to each other. |
-| 🧱 **No web engine** | The desktop app is pure Rust (egui): no WebView, no JavaScript, no HTML. Message text is only ever drawn as plain text, and nothing is written to disk. |
+| 🧱 **No web engine** | The desktop app is pure Rust (egui): no WebView, no JavaScript, no HTML. Message text is only ever drawn as plain text. No messages, settings or history are written to disk; only Tor's guard/directory state is kept, like Tor Browser (`GHOSTLINE_AMNESIC=1` = nothing at all). |
 
 ## Quick start
 
@@ -219,13 +219,20 @@ Inside a room: `/help` · `/who` · `/info` · `/quit` (Ctrl+C) · `/burn`
    ./target/release/ghostline-relay              # stays on 127.0.0.1
    ```
 
-2. **Clients** need Tor running locally. On Linux: `sudo dnf install tor && sudo systemctl start tor`
-   (port 9050). On Windows or Linux you can also just open **Tor Browser** (port 9150).
+2. **Clients need nothing extra.** Tor is built in. Paste the `.onion` address into the
+   **Relay** field (desktop app) or pass `--relay` (terminal). On the first start Tor takes
+   10–60 s to connect (progress bar), after that it is faster.
 
    ```bash
    ghostline create --relay http://abcd…xyz.onion
-   ghostline join <ID> --relay http://abcd…xyz.onion --tor-port 9150   # with Tor Browser
+   ghostline join <ID> --relay http://abcd…xyz.onion
+   ghostline join <ID> --relay http://abcd…xyz.onion --external-tor --tor-port 9150   # use Tor Browser instead
    ```
+
+   Like Tor Browser, the built-in Tor remembers its guard relays and a directory cache
+   (`~/.local/share/ghostline/arti`, on Windows `%LOCALAPPDATA%\ghostline\arti`). Stable
+   guards **protect** you against correlation. For a leave-no-trace session set
+   `GHOSTLINE_AMNESIC=1`: Tor then uses a temporary folder that is deleted on exit.
 
    Tip: `export GHOSTLINE_RELAY=http://abcd…xyz.onion` (PowerShell: `$env:GHOSTLINE_RELAY="…"`).
 
@@ -288,7 +295,8 @@ A security tool should be upfront about what it **cannot** do:
 - [x] **M6a** Burn room
 - [x] **M5** Desktop app (Linux + Windows): matrix UI, bubbles, ✔/✔✔, hold-to-burn, screen-capture exclusion on Windows, EN/TR/RU
 - [ ] **M2b** `libsignal` (PQXDH + Double Ratchet)
-- [ ] **M4** Embedded Tor (Arti): circuit rotation, stream isolation, bridges
+- [x] **M4a** Built-in Tor (Arti): per-room circuit isolation, rotation every 10 min, amnesic mode
+- [ ] **M4b** Bridges / pluggable transports for countries that block Tor
 - [ ] **M6b** Panic wipe, optional encrypted local history
 - [ ] **M7** Android
 - [ ] **M8** External security audit
