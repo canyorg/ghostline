@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "ghostline"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "ghostline-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "ghostline-core",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "ghostline-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "bincode",
@@ -1383,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "ghostline-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "ghostline-relay"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
