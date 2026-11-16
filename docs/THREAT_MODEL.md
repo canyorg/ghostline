@@ -31,7 +31,8 @@ locations (IPs) · nicknames.
 ## Mitigations recap
 
 - Argon2id (128 MiB) against offline password guessing.
-- Per-room Signal identities, so rooms cannot be linked.
+- libsignal: PQXDH (post-quantum) + Double Ratchet pairwise, Sender Keys for groups; per-room
+  Signal identities, so rooms cannot be linked; safety numbers for verification.
 - Message padding buckets against size analysis.
 - Receipts and typing indicators can be switched off to reduce timing leaks.
 - Stream isolation per room and periodic circuit rotation.

@@ -12,7 +12,7 @@ No accounts. No phone numbers. No e-mail. No IP addresses. No user agents. No lo
 You get a room number and a password, you pick a nickname, you talk, you burn the room.
 
 > ⚠️ **Status: pre-alpha, not audited.** The building blocks are established (Tor, Argon2id,
-> X25519, Ed25519, XChaCha20-Poly1305), but this implementation has not been reviewed
+> Signal's libsignal, XChaCha20-Poly1305), but this implementation has not been reviewed
 > independently. Do not rely on it where your safety depends on it until an audit is done.
 > See [Known limitations](#known-limitations).
 
@@ -124,6 +124,10 @@ Rules that save you time:
   reachable **only through Tor**. Opening it to the network (`0.0.0.0`) would let people
   connect without Tor, and the relay would see their IPs.
 
+**Why is there no default relay?** On purpose. A built-in relay would be a central server
+that everyone has to trust and that someone could switch off for everybody. With GhostLine, you,
+or someone you trust, run the relay. That fits zero trust better, and the relay still learns nothing.
+
 ### 3. Run your own relay (one-time setup, Linux)
 
 Do this on a computer or server that stays **on and online** while you chat; a cheap VPS
@@ -179,8 +183,10 @@ sleep 15; sudo cat /var/lib/tor/ghostline/hostname
 
 - **Send:** type and press **Enter** (**Shift+Enter** for a new line).
 - **Ticks:** ⏳ sending · ✔ on the relay · ✔✔ delivered to everyone · **cyan ✔✔** read by everyone.
-- **Fingerprint:** `Acid Burn#afdb04`. The `#code` belongs to that person's key. If it suddenly
-  changes, it is a different device or person.
+- **Fingerprint:** `Acid Burn#afdb04`. The `#code` belongs to that person's key.
+- **Safety number:** open **Members** to see a 60-digit Signal safety number for every person.
+  Compare it with them in person or by phone. If both screens show the same number, nobody is
+  in between. If it doesn't match, or the `#code` suddenly changes, don't trust the conversation.
 - **Members** shows who is in the room. **Room info** shows the ID and password again.
 - **Leave:** you leave; the others get new keys, so you can't read anything sent later.
 - **🔥 BURN ROOM:** hold the button for **1.5 s**. The room is deleted from the relay at once,
@@ -206,9 +212,10 @@ sleep 15; sudo cat /var/lib/tor/ghostline/hostname
 End-to-end means the keys exist **only on the members' devices**:
 
 1. The password never leaves your computer. Argon2id turns it into the room key on your device.
-2. Every member creates fresh secret keys on their own device. Each member's message keys are
-   handed to the others individually, encrypted with X25519, so even someone who knows the room
-   password cannot unwrap them.
+2. Every member creates a fresh **Signal identity** on their own device, for this room only.
+   Every pair of members sets up a **PQXDH + Double Ratchet** session (Signal's library,
+   post-quantum). Group keys are handed out only over those sessions, so even someone who knows
+   the room password cannot read anything.
 3. Every message is encrypted on the sender's device and decrypted only on the recipients'
    devices. In between, through Tor and on the relay, it is just a padded, random-looking blob.
 
@@ -268,7 +275,7 @@ snapshot you can roll back after use.
 
 | | |
 |---|---|
-| 🔐 **End-to-end encryption** | **Now:** Signal-style *Sender Keys*. Each member has a ratcheting chain (forward secrecy), keys are handed out pairwise over X25519, every message is Ed25519-signed, and everyone re-keys when someone leaves. Uses XChaCha20-Poly1305 and HKDF-SHA256. **Next:** full `libsignal` (PQXDH + Double Ratchet). |
+| 🔐 **End-to-end encryption** | Signal's own library, **libsignal**: every pair of members runs **PQXDH** (X25519 + ML-KEM-1024, post-quantum) and the **Double Ratchet** — forward secrecy *and* post-compromise security, exactly as in Signal. Group messages use Signal's **Sender Keys** (as in Signal and WhatsApp groups), handed out over those pairwise sessions and replaced when someone leaves and every 100 messages. **Safety numbers** let you verify each other. |
 | 🧅 **Built-in Tor** | Tor is **built into the app** (Arti, the Tor Project's Rust implementation). No Tor Browser and no tor service needed: open the app and it connects to Tor on its own. Each room gets its own isolated circuits, and circuits are replaced every 10 minutes. The relay is a `.onion` service, so the path has 6 hops, no exit node, and the server never sees an IP. A non-local relay is never contacted without Tor. You can still use an external Tor (Tor Browser / tor service). |
 | 👻 **Zero metadata** | No accounts, no IPs, no user agents, no contact lists. The relay stores only padded ciphertext under a random mailbox address, in RAM. Nicknames exist only inside encrypted payloads. |
 | 🔢 **Numeric room IDs** | Like a crypto wallet or a Mullvad account number: 16–23 digits with a **random length**. A Damm check digit catches every single-digit typo and every swap of two neighbouring digits. |
@@ -282,7 +289,9 @@ snapshot you can roll back after use.
 
 ## Build from source (developers)
 
-You need [Rust](https://rustup.rs). It works on Linux (Fedora, Debian, Arch…), Windows 10/11
+You need [Rust](https://rustup.rs) and `protoc`, the Protocol Buffers compiler that libsignal needs
+(Fedora: `sudo dnf install protobuf-compiler` · Debian/Ubuntu/Kali: `sudo apt install protobuf-compiler` ·
+Windows: `winget install Google.Protobuf`). It works on Linux (Fedora, Debian, Arch…), Windows 10/11
 (PowerShell, Windows Terminal) and macOS.
 
 ```bash
@@ -409,10 +418,10 @@ A security tool should be upfront about what it **cannot** do:
 8. **In countries that block Tor** you will need bridges (or Mullvad in front of Tor).
 9. **Memory hygiene is best-effort.** Keys are zeroized after use, but swap, hibernation files
    and crash dumps can still hold secrets. Use full-disk encryption.
-10. **Interim group crypto.** v0 Sender Keys give forward secrecy but no post-compromise
-    security. libsignal is on the roadmap.
-11. **Fingerprints are short.** `#1a2b3c` is 24 bits: enough to notice a swap, not enough to
-    prove identity.
+10. **Check safety numbers when it matters.** The short `#code` (24 bits) only helps you notice
+    a swap. To be sure who you are talking to, compare the 60-digit safety numbers (see the user guide).
+11. **libsignal is used outside Signal.** Signal does not officially support third-party use of its
+    library; GhostLine pins a fixed version and updates it deliberately.
 12. **Not audited yet.**
 13. **Your operating system can betray you.** Windows telemetry ties activity to a persistent
     device ID. Run GhostLine in a Linux VM; see [Maximum OPSEC](#maximum-opsec-run-it-in-a-vm).
@@ -425,7 +434,7 @@ A security tool should be upfront about what it **cannot** do:
 - [x] **CLI** Terminal client for Linux and Windows, Tor via SOCKS
 - [x] **M6a** Burn room
 - [x] **M5** Desktop app (Linux + Windows): matrix UI, bubbles, ✔/✔✔, hold-to-burn, screen-capture exclusion on Windows, EN/TR/RU/DE
-- [ ] **M2b** `libsignal` (PQXDH + Double Ratchet)
+- [x] **M2b** Protocol v2 on `libsignal`: PQXDH + Double Ratchet, Sender Keys, safety numbers
 - [x] **M4a** Built-in Tor (Arti): per-room circuit isolation, rotation every 10 min, amnesic mode
 - [ ] **M4b** Bridges / pluggable transports for countries that block Tor
 - [ ] **M6b** Panic wipe, optional encrypted local history

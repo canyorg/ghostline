@@ -12,7 +12,7 @@ Hesap yok. Telefon numarası yok. E-posta yok. IP adresi yok. User agent yok. Lo
 Bir oda numarası ve parola alırsın, takma adını seçersin, konuşursun, işin bitince odayı yakarsın.
 
 > ⚠️ **Durum: pre-alpha, henüz denetlenmedi.** Kullanılan yapı taşları köklü ve güvenilir
-> (Tor, Argon2id, X25519, Ed25519, XChaCha20-Poly1305), ancak bu uygulama henüz bağımsız
+> (Tor, Argon2id, Signal'in libsignal kütüphanesi, XChaCha20-Poly1305), ancak bu uygulama henüz bağımsız
 > olarak incelenmedi. Bir denetim yapılana kadar can güvenliğinin bağlı olduğu durumlarda
 > tek başına güvenme. [Bilinen sınırlamalar](#bilinen-sınırlamalar) bölümüne bak.
 
@@ -124,6 +124,10 @@ Vakit kazandıran kurallar:
   **sadece Tor üzerinden** ulaşılabilir. Ağa açarsan (`0.0.0.0`) insanlar Tor'suz bağlanabilir
   ve relay onların IP'sini görür.
 
+**Neden varsayılan bir relay yok?** Bilerek böyle. Uygulamaya gömülü bir relay herkesin güvenmek
+zorunda olduğu merkezi bir sunucu olurdu ve biri onu herkes için kapatabilirdi. GhostLine'da relay'i
+sen ya da güvendiğin biri çalıştırır. Bu zero trust ilkesine daha uygun, üstelik relay yine hiçbir şey öğrenemez.
+
 ### 3. Kendi relay'ini kur (bir kerelik kurulum, Linux)
 
 Bunu sohbet ederken **açık ve internete bağlı** kalacak bir bilgisayarda ya da sunucuda yap;
@@ -179,8 +183,10 @@ sleep 15; sudo cat /var/lib/tor/ghostline/hostname
 
 - **Gönder:** yaz ve **Enter**'a bas (**Shift+Enter** yeni satır).
 - **İşaretler:** ⏳ gönderiliyor · ✔ relay'de · ✔✔ herkese ulaştı · **cyan ✔✔** herkes okudu.
-- **Parmak izi:** `Acid Burn#afdb04`. `#kod` o kişinin anahtarına aittir. Birden değişirse
-  karşındaki başka bir cihaz ya da başka bir kişidir.
+- **Parmak izi:** `Acid Burn#afdb04`. `#kod` o kişinin anahtarına aittir.
+- **Güvenlik numarası:** **Üyeler**'i aç; her kişi için 60 haneli bir Signal güvenlik numarası
+  görünür. Bunu o kişiyle yüz yüze ya da telefonda karşılaştır. İki ekranda da aynıysa arada kimse
+  yok. Uyuşmuyorsa ya da `#kod` birden değişirse o konuşmaya güvenme.
 - **Üyeler** odada kimlerin olduğunu, **Oda bilgisi** ID'yi ve parolayı tekrar gösterir.
 - **Çık:** odadan çıkarsın; diğerleri yeni anahtar alır, sonrasını okuyamazsın.
 - **🔥 ODAYI SİL:** butonu **1,5 saniye** basılı tut. Oda relay'den anında silinir, herkesin
@@ -206,8 +212,10 @@ sleep 15; sudo cat /var/lib/tor/ghostline/hostname
 Uçtan uca şifreleme, anahtarların **sadece üyelerin cihazlarında** bulunması demektir:
 
 1. Parola bilgisayarından hiç çıkmaz. Argon2id onu senin cihazında oda anahtarına çevirir.
-2. Her üye kendi cihazında yeni gizli anahtarlar üretir. Her üyenin mesaj anahtarları diğer
-   üyelere tek tek, X25519 ile şifrelenerek verilir; oda parolasını bilen biri bile bunları açamaz.
+2. Her üye bu oda için kendi cihazında yeni bir **Signal kimliği** üretir. Her üye çifti
+   arasında bir **PQXDH + Double Ratchet** oturumu kurulur (Signal'in kütüphanesi, kuantum
+   sonrası). Grup anahtarları sadece bu oturumlar üzerinden dağıtılır; oda parolasını bilen biri
+   bile hiçbir şey okuyamaz.
 3. Her mesaj gönderenin cihazında şifrelenir ve sadece alıcıların cihazında çözülür. Arada, yani
    Tor'da ve relay'de, dolgulu ve rastgele görünen bir veri yığınından ibarettir.
 
@@ -265,7 +273,7 @@ sanal makinede Tor ve kullanımdan sonra geri dönebileceğin bir snapshot.
 
 | | |
 |---|---|
-| 🔐 **Uçtan uca şifreleme** | **Şu an:** Signal'in grup yöntemi *Sender Keys*. Her üyenin ileri yönde değişen bir anahtar zinciri var (forward secrecy), anahtarlar X25519 ile kişiye özel dağıtılıyor, her mesaj Ed25519 ile imzalanıyor ve biri ayrılınca herkes anahtar yeniliyor. XChaCha20-Poly1305 ve HKDF-SHA256 kullanılıyor. **Sırada:** tam `libsignal` (PQXDH + Double Ratchet). |
+| 🔐 **Uçtan uca şifreleme** | Signal'in kendi kütüphanesi **libsignal**: her üye çifti arasında **PQXDH** (X25519 + ML-KEM-1024, kuantum sonrası) ve **Double Ratchet** çalışır. Signal'deki gibi hem forward secrecy hem post-compromise security sağlar. Grup mesajlarında Signal'in **Sender Keys** yöntemi kullanılır (Signal ve WhatsApp gruplarındaki gibi); grup anahtarları bu ikili oturumlar üzerinden dağıtılır, biri ayrılınca ve her 100 mesajda bir yenilenir. **Güvenlik numaralarıyla** birbirinizi doğrulayabilirsiniz. |
 | 🧅 **Yerleşik Tor** | Tor **uygulamanın içinde** (Arti, Tor Project'in Rust ile yazdığı Tor). Tor Browser'a ya da tor servisine gerek yok: uygulamayı açtığında Tor'a kendisi bağlanır. Her odanın devreleri ayrıdır ve devreler 10 dakikada bir yenilenir. Relay bir `.onion` servisi, yani yol 6 atlamalı, çıkış düğümü yok ve sunucu hiçbir IP görmez. Uzaktaki bir relay'e Tor'suz asla bağlanılmaz. İstersen harici Tor da (Tor Browser / tor servisi) kullanabilirsin. |
 | 👻 **Sıfır metadata** | Hesap, IP, user agent ve kişi listesi yok. Relay, rastgele bir posta kutusu adresinde yalnızca dolgulu şifreli veriyi RAM'de tutar. Takma adlar sadece şifreli içeriğin içinde bulunur. |
 | 🔢 **Sayısal oda ID'si** | Kripto cüzdanı veya Mullvad hesap numarası gibi: 16–23 hane, **uzunluğu her seferinde rastgele**. Damm kontrol hanesi, tek hanelik her yazım hatasını ve yan yana iki hanenin her yer değiştirmesini yakalar. |
@@ -279,7 +287,9 @@ sanal makinede Tor ve kullanımdan sonra geri dönebileceğin bir snapshot.
 
 ## Kaynak koddan derleme (geliştiriciler)
 
-[Rust](https://rustup.rs) gerekir. Linux'ta (Fedora, Debian, Arch…), Windows 10/11'de
+[Rust](https://rustup.rs) ve libsignal'in ihtiyaç duyduğu Protocol Buffers derleyicisi `protoc` gerekir
+(Fedora: `sudo dnf install protobuf-compiler` · Debian/Ubuntu/Kali: `sudo apt install protobuf-compiler` ·
+Windows: `winget install Google.Protobuf`). Linux'ta (Fedora, Debian, Arch…), Windows 10/11'de
 (PowerShell, Windows Terminal) ve macOS'te çalışır.
 
 ```bash
@@ -405,10 +415,11 @@ Bir güvenlik aracı neyi **yapamadığını** açıkça söylemeli:
 8. **Tor'un engellendiği ülkelerde** köprü (bridge) kullanman ya da Tor'un önüne Mullvad koyman gerekir.
 9. **Bellek temizliği en iyi çaba esaslıdır.** Anahtarlar kullanıldıktan sonra silinir, ancak
    swap, hazırda bekletme dosyası ve çökme dökümlerinde kalıntı olabilir. Tam disk şifreleme kullan.
-10. **Grup şifrelemesi ara çözüm.** v0'daki Sender Keys forward secrecy sağlar ama
-    post-compromise security sağlamaz. libsignal yol haritasında.
-11. **Parmak izleri kısa.** `#1a2b3c` 24 bit: birinin yerine başkasının geçtiğini fark etmeye
-    yeter, kimliği kanıtlamaya yetmez.
+10. **Önemli durumlarda güvenlik numaralarını karşılaştır.** Kısa `#kod` (24 bit) sadece birinin yerine
+    başkasının geçtiğini fark etmeye yarar. Kiminle konuştuğundan emin olmak için 60 haneli güvenlik
+    numaralarını karşılaştır (kullanım kılavuzuna bak).
+11. **libsignal, Signal dışında kullanılıyor.** Signal, kütüphanesinin üçüncü taraflarca kullanımını resmi
+    olarak desteklemiyor. GhostLine sabit bir sürüm kullanıyor ve onu bilinçli şekilde güncelliyor.
 12. **Henüz denetlenmedi.**
 13. **İşletim sistemin seni ele verebilir.** Windows telemetrisi yaptıklarını kalıcı bir cihaz
     kimliğine bağlar. GhostLine'ı Linux sanal makinede çalıştır, [Maksimum OPSEC](#maksimum-opsec-sanal-makinede-çalıştır) bölümüne bak.
@@ -421,7 +432,7 @@ Bir güvenlik aracı neyi **yapamadığını** açıkça söylemeli:
 - [x] **CLI** Linux ve Windows terminal istemcisi, SOCKS ile Tor
 - [x] **M6a** Odayı yakma
 - [x] **M5** Masaüstü uygulaması (Linux + Windows): matrix arayüzü, balonlar, ✔/✔✔, basılı tutarak silme, Windows'ta ekran yakalama engeli, TR/EN/RU/DE
-- [ ] **M2b** `libsignal` (PQXDH + Double Ratchet)
+- [x] **M2b** libsignal ile protokol v2: PQXDH + Double Ratchet, Sender Keys, güvenlik numaraları
 - [x] **M4a** Yerleşik Tor (Arti): oda başına ayrı devre, 10 dakikada bir devre yenileme, iz bırakmayan mod
 - [ ] **M4b** Tor'un engellendiği ülkeler için köprüler (bridges)
 - [ ] **M6b** Panik silme, isteğe bağlı şifreli yerel geçmiş

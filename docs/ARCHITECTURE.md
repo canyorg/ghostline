@@ -38,37 +38,41 @@ delete_tok  = HKDF(master, "ghostline/v1/delete-token")
 
 The relay learns only `mailbox_id` and `SHA-256(delete_tok)`.
 
-## 2. Joining and messaging (M2a, implemented — `crates/core/src/session.rs`)
+## 2. Joining and messaging (protocol v2, implemented — `crates/core/src/session.rs`)
 
-Every blob on the relay is `nonce ‖ XChaCha20-Poly1305(room_key, pad(Inner))`. The outer
-layer hides type, sender and size class from the relay. Inside are three signed messages:
+All message cryptography is done by Signal's own **libsignal-protocol** (pinned to v0.108.0).
+Every blob on the relay is `nonce ‖ XChaCha20-Poly1305(room_key, pad("G2" ‖ Inner))`. The outer
+layer hides type, sender and size class from the relay. Inside:
 
 | Inner | Purpose |
 |---|---|
-| `Hello{member, dh, nick}` | announces a fresh **per-room** Ed25519 identity + X25519 key, self-signed |
-| `KeyDist{from, to, epoch, ct}` | sender's chain key, encrypted to one member with `HKDF(X25519(from,to))` |
-| `Msg{from, epoch, index, ct}` | content encrypted with the sender's ratchet message key |
+| `Hello{identity, signed pre-key, ML-KEM pre-key, nick}` | fresh **per-room Signal identity** + PQXDH bundle, signed with the identity key (XEdDSA) |
+| `Direct{from, to, prekey?, body}` | libsignal pairwise message (`PreKeySignalMessage` / `SignalMessage`), carrying a Sender Key distribution message |
+| `Group{from, body}` | libsignal `SenderKeyMessage` carrying `Content` (text, receipts, burn) |
+| `Leave{member, sig}` | identity-signed leave notice, readable by every member |
 
-1. The joiner derives the secrets and fetches the mailbox.
-   Empty/absent mailbox → "room not found or wrong password". The two are indistinguishable.
-2. The joiner posts `Hello`. Everyone who sees a new `Hello` sends that member a `KeyDist`
-   of their own **current** chain position; the joiner does the same for every `Hello` in history.
-3. Sending: `mk = HKDF(ck,"msg")`, `ck' = HKDF(ck,"next")`, old keys deleted (forward secrecy).
-   Receivers keep at most 4000 skipped keys for out-of-order delivery; replays are rejected.
-4. Newcomers get the chain at its current index → **cannot read history**.
-5. `Leave` → every remaining member starts a new epoch and re-distributes keys → the
-   leaver cannot read on.
-6. Every `Msg` is Ed25519-signed by the sender's room identity; a password holder can
-   neither read nor forge.
+1. The joiner derives the secrets and fetches the mailbox (absent → "not found or wrong password").
+2. The joiner posts `Hello`. Everyone who sees a new `Hello` runs **PQXDH**
+   (X25519 + ML-KEM-1024) against the bundle, which starts a **Double Ratchet** session, and sends
+   its current Sender Key to the newcomer over that session. The newcomer does the same for every
+   `Hello` in the history.
+3. Group messages use **Sender Keys** (`group_encrypt`/`group_decrypt`); each `SenderKeyMessage`
+   is signed with the sender's sender-key signing key.
+4. Newcomers receive sender keys at their *current* iteration → **no history**.
+5. `Leave` → every remaining member creates a new sender key (new distribution id) and sends it
+   over the pairwise sessions → the leaver cannot read on. Members also rotate their sender key
+   every 100 messages (post-compromise recovery for the group layer); the pairwise layer heals
+   with every Double Ratchet step.
+6. Safety numbers: libsignal `Fingerprint` (version 2, 5200 iterations), 60 digits, identical on
+   both sides.
+7. Blobs without the `G2` marker but with a valid outer layer come from v1 clients →
+   `Event::OutdatedPeer` ("someone must update").
 
-`room_key` (from the password) only protects the outer layer and the act of joining.
+All Signal state lives in libsignal's in-memory stores and disappears with the session.
 
-**Planned (M2b):** replace KeyDist with libsignal pairwise sessions (PQXDH + Double
-Ratchet) and rotate sender chains periodically, adding post-compromise security.
+### Content types (inside `Group`)
 
-### Content types (inside `Msg`)
-
-`Text{id, text, ts}` · `Receipt{Delivered|Read, ids}` · `Leave` · `Burn`
+`Text{id, text, ts}` · `Receipt{Delivered|Read, ids}` · `Burn`
 
 ### Delivery status
 
@@ -77,7 +81,7 @@ Ratchet) and rotate sender chains periodically, adding post-compromise security.
 | ⏳ | sending | – |
 | ✓ | stored on relay | relay 200 on POST |
 | ✓✓ | delivered | `Receipt{Delivered}` from **every** member present when it was sent |
-| ✓✓ (cyan) | read | `Receipt{Read}` from every member. Terminal client sends it on the next key press; `--no-read-receipts` disables |
+| ✓✓ (cyan) | read | `Receipt{Read}` from every member |
 
 ## 3. Relay (M3, implemented — `crates/relay`)
 

@@ -12,7 +12,7 @@ Keine Konten. Keine Telefonnummern. Keine E-Mail. Keine IP-Adressen. Keine User-
 Du bekommst eine Raumnummer und ein Passwort, wählst einen Spitznamen, chattest und löschst den Raum am Ende.
 
 > ⚠️ **Status: Pre-Alpha, nicht auditiert.** Die Bausteine sind etabliert (Tor, Argon2id,
-> X25519, Ed25519, XChaCha20-Poly1305), aber diese Implementierung wurde noch nicht unabhängig
+> Signals libsignal, XChaCha20-Poly1305), aber diese Implementierung wurde noch nicht unabhängig
 > geprüft. Verlass dich nicht darauf, wo deine Sicherheit davon abhängt, bis ein Audit erfolgt
 > ist. Siehe [Bekannte Einschränkungen](#bekannte-einschränkungen).
 
@@ -129,6 +129,10 @@ Regeln, die Zeit sparen:
   Relay **nur über Tor** erreichbar ist. Öffnest du es ins Netz (`0.0.0.0`), können sich Leute
   ohne Tor verbinden, und das Relay sieht ihre IP.
 
+**Warum gibt es kein Standard-Relay?** Absichtlich. Ein eingebautes Relay wäre ein zentraler Server,
+dem alle vertrauen müssten und den jemand für alle abschalten könnte. Bei GhostLine betreibst du das
+Relay selbst oder jemand, dem du vertraust. Das passt besser zu Zero Trust, und das Relay erfährt trotzdem nichts.
+
 ### 3. Eigenes Relay betreiben (einmalige Einrichtung, Linux)
 
 Mach das auf einem Rechner oder Server, der **an und online** bleibt, solange ihr chattet; ein
@@ -184,8 +188,11 @@ sleep 15; sudo cat /var/lib/tor/ghostline/hostname
 
 - **Senden:** tippen und **Enter** drücken (**Umschalt+Enter** = neue Zeile).
 - **Häkchen:** ⏳ wird gesendet · ✔ auf dem Relay · ✔✔ an alle zugestellt · **cyanfarbene ✔✔** von allen gelesen.
-- **Fingerabdruck:** `Acid Burn#afdb04`. Der `#Code` gehört zum Schlüssel dieser Person. Ändert
-  er sich plötzlich, ist es ein anderes Gerät oder eine andere Person.
+- **Fingerabdruck:** `Acid Burn#afdb04`. Der `#Code` gehört zum Schlüssel dieser Person.
+- **Sicherheitsnummer:** Öffne **Mitglieder**: Dort steht für jede Person eine 60-stellige
+  Signal-Sicherheitsnummer. Vergleiche sie mit der Person persönlich oder am Telefon. Ist sie auf
+  beiden Bildschirmen gleich, sitzt niemand dazwischen. Stimmt sie nicht überein oder ändert sich der
+  `#Code` plötzlich, vertrau dem Gespräch nicht.
 - **Mitglieder** zeigt, wer im Raum ist. **Rauminfo** zeigt ID und Passwort erneut.
 - **Verlassen:** du verlässt den Raum; die anderen bekommen neue Schlüssel, du kannst nichts Späteres mehr lesen.
 - **🔥 RAUM LÖSCHEN:** den Knopf **1,5 Sekunden** gedrückt halten. Der Raum wird sofort vom Relay
@@ -211,9 +218,10 @@ sleep 15; sudo cat /var/lib/tor/ghostline/hostname
 Ende-zu-Ende heißt: Die Schlüssel existieren **nur auf den Geräten der Mitglieder**.
 
 1. Das Passwort verlässt nie deinen Rechner. Argon2id macht daraus auf deinem Gerät den Raumschlüssel.
-2. Jedes Mitglied erzeugt auf dem eigenen Gerät frische geheime Schlüssel. Die Nachrichtenschlüssel
-   jedes Mitglieds werden den anderen einzeln übergeben, verschlüsselt mit X25519, sodass sie
-   selbst jemand mit dem Raumpasswort nicht entschlüsseln kann.
+2. Jedes Mitglied erzeugt auf dem eigenen Gerät eine frische **Signal-Identität**, nur für diesen Raum.
+   Jedes Mitgliederpaar baut eine **PQXDH- + Double-Ratchet-Sitzung** auf (Signals Bibliothek,
+   Post-Quanten). Gruppenschlüssel werden nur über diese Sitzungen verteilt, daher kann selbst jemand
+   mit dem Raumpasswort nichts lesen.
 3. Jede Nachricht wird auf dem Gerät des Absenders verschlüsselt und nur auf den Geräten der
    Empfänger entschlüsselt. Dazwischen, über Tor und auf dem Relay, ist sie nur ein aufgefüllter,
    zufällig aussehender Datenblock.
@@ -275,7 +283,7 @@ auf dem Host oder in der VM, Tor in der VM und ein Snapshot, auf den du nach der
 
 | | |
 |---|---|
-| 🔐 **Ende-zu-Ende-Verschlüsselung** | **Jetzt:** *Sender Keys* nach Signal-Vorbild. Jedes Mitglied hat eine fortlaufend weitergedrehte Schlüsselkette (Forward Secrecy), Schlüssel werden paarweise über X25519 verteilt, jede Nachricht ist Ed25519-signiert, und beim Verlassen eines Mitglieds erneuern alle ihre Schlüssel. XChaCha20-Poly1305 und HKDF-SHA256. **Als Nächstes:** vollständiges `libsignal` (PQXDH + Double Ratchet). |
+| 🔐 **Ende-zu-Ende-Verschlüsselung** | Signals eigene Bibliothek **libsignal**: Jedes Mitgliederpaar nutzt **PQXDH** (X25519 + ML-KEM-1024, Post-Quanten) und den **Double Ratchet**. Wie bei Signal bringt das Forward Secrecy *und* Post-Compromise Security. Gruppennachrichten nutzen Signals **Sender Keys** (wie in Signal- und WhatsApp-Gruppen); die Gruppenschlüssel werden über diese paarweisen Sitzungen verteilt und beim Verlassen eines Mitglieds sowie alle 100 Nachrichten erneuert. Mit **Sicherheitsnummern** könnt ihr euch gegenseitig überprüfen. |
 | 🧅 **Eingebautes Tor** | Tor ist **in die App eingebaut** (Arti, die Rust-Implementierung des Tor Project). Kein Tor Browser und kein Tor-Dienst nötig: Die App verbindet sich selbst mit Tor. Jeder Raum hat eigene, isolierte Ketten, die alle 10 Minuten erneuert werden. Das Relay ist ein `.onion`-Dienst: 6 Hops, kein Exit-Knoten, der Server sieht keine IP. Ein entferntes Relay wird nie ohne Tor kontaktiert. Externes Tor (Tor Browser / Tor-Dienst) geht weiterhin. |
 | 👻 **Null Metadaten** | Keine Konten, keine IPs, keine User-Agents, keine Kontaktlisten. Das Relay speichert nur aufgefüllten Chiffretext unter einer zufälligen Briefkastenadresse, im RAM. Spitznamen existieren nur in verschlüsselten Daten. |
 | 🔢 **Numerische Raum-IDs** | Wie eine Krypto-Wallet oder eine Mullvad-Kontonummer: 16–23 Ziffern, **zufällige Länge**. Eine Damm-Prüfziffer erkennt jeden Einzelziffer-Tippfehler und jede Vertauschung zweier Nachbarziffern. |
@@ -289,7 +297,9 @@ auf dem Host oder in der VM, Tor in der VM und ein Snapshot, auf den du nach der
 
 ## Aus dem Quellcode bauen (Entwickler)
 
-Du brauchst [Rust](https://rustup.rs). Läuft unter Linux (Fedora, Debian, Arch…), Windows 10/11
+Du brauchst [Rust](https://rustup.rs) und `protoc`, den Protocol-Buffers-Compiler, den libsignal benötigt
+(Fedora: `sudo dnf install protobuf-compiler` · Debian/Ubuntu/Kali: `sudo apt install protobuf-compiler` ·
+Windows: `winget install Google.Protobuf`). Läuft unter Linux (Fedora, Debian, Arch…), Windows 10/11
 (PowerShell, Windows Terminal) und macOS.
 
 ```bash
@@ -417,10 +427,11 @@ Ein Sicherheitswerkzeug sollte offen sagen, was es **nicht** kann:
 8. **In Ländern, die Tor blockieren,** brauchst du Bridges (oder Mullvad vor Tor).
 9. **Speicherhygiene nach bestem Bemühen.** Schlüssel werden nach Gebrauch überschrieben, doch
    Swap, Ruhezustandsdatei und Absturzabbilder können Reste enthalten. Nutze Festplattenverschlüsselung.
-10. **Übergangslösung bei der Gruppenverschlüsselung.** Die Sender Keys in v0 bieten Forward Secrecy,
-    aber keine Post-Compromise Security. libsignal steht auf der Roadmap.
-11. **Fingerabdrücke sind kurz.** `#1a2b3c` sind 24 Bit: genug, um einen Austausch zu bemerken,
-    nicht genug, um eine Identität zu beweisen.
+10. **Wenn es darauf ankommt: Sicherheitsnummern vergleichen.** Der kurze `#Code` (24 Bit) hilft nur,
+    einen Austausch zu bemerken. Um sicher zu wissen, mit wem du sprichst, vergleiche die 60-stelligen
+    Sicherheitsnummern (siehe Bedienungsanleitung).
+11. **libsignal wird außerhalb von Signal genutzt.** Signal unterstützt die Nutzung seiner Bibliothek
+    durch Dritte nicht offiziell; GhostLine nutzt eine feste Version und aktualisiert sie bewusst.
 12. **Noch nicht auditiert.**
 13. **Dein Betriebssystem kann dich verraten.** Windows-Telemetrie bindet Aktivität an eine
     dauerhafte Geräte-ID. Führe GhostLine in einer Linux-VM aus, siehe
@@ -434,7 +445,7 @@ Ein Sicherheitswerkzeug sollte offen sagen, was es **nicht** kann:
 - [x] **CLI** Terminal-Client für Linux und Windows, Tor über SOCKS
 - [x] **M6a** Raum löschen
 - [x] **M5** Desktop-App (Linux + Windows): Matrix-Oberfläche, Sprechblasen, ✔/✔✔, Löschen per Gedrückthalten, Screenshot-Schutz unter Windows, EN/TR/RU/DE
-- [ ] **M2b** `libsignal` (PQXDH + Double Ratchet)
+- [x] **M2b** Protokoll v2 auf `libsignal`: PQXDH + Double Ratchet, Sender Keys, Sicherheitsnummern
 - [x] **M4a** Eingebautes Tor (Arti): eigene Ketten pro Raum, Erneuerung alle 10 Minuten, spurloser Modus
 - [ ] **M4b** Bridges / Pluggable Transports für Länder, die Tor blockieren
 - [ ] **M6b** Panik-Löschung, optional verschlüsselter lokaler Verlauf
