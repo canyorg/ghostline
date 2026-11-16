@@ -68,6 +68,71 @@ you ──► Mullvad (2 hops, DAITA) ──► Tor (3 hops) ──► relay.oni
 This combination is the ideal setup. The VPN is not required, since Tor alone already hides
 your IP from the relay. Mullvad adds a layer against your ISP and local network.
 
+## How it stays private
+
+### Why the relay cannot read your messages
+
+End-to-end means the keys exist **only on the members' devices**:
+
+1. The password never leaves your computer. Argon2id turns it into the room key on your device.
+2. Every member creates fresh secret keys on their own device. Each member's message keys are
+   handed to the others individually, encrypted with X25519, so even someone who knows the room
+   password cannot unwrap them.
+3. Every message is encrypted on the sender's device and decrypted only on the recipients'
+   devices. In between, through Tor and on the relay, it is just a padded, random-looking blob.
+
+The relay never sees a password, a key, a nickname or a room ID. It stores unreadable bytes
+under a random mailbox address. A hostile relay operator, a hacker on the server, or a police
+seizure of the server gets nothing readable. Because used keys are deleted right away, even
+stealing a device later does not reveal earlier messages (forward secrecy).
+
+### How Tor hides your IP address: 3 relays that cannot see each other
+
+```
+you ──► [1] guard ──► [2] middle ──► [3] rendezvous ◄── 3 more hops ◄── GhostLine relay (.onion)
+        knows your IP    knows neither   knows neither your IP
+        not the target   end              nor the relay's
+```
+
+Your traffic is wrapped in 3 layers of encryption (an "onion"). Each relay removes exactly one
+layer and only learns the hop before it and the hop after it:
+
+- **[1] Guard** sees your IP address but not where the traffic is going.
+- **[2] Middle** sees neither you nor the destination.
+- **[3] Last relay** sees the next step but not your IP.
+
+No single relay can see both ends, which is why your IP address does not leak. The GhostLine
+relay runs as an onion service behind its own 3 hops, so the full path is 6 hops with no exit
+node, and the relay never learns any IP.
+
+**Risk:** if the **1st and 3rd relay (or your guard and the relay's side) belong to the same
+operator**, that operator can match the timing and size of the traffic on both ends and link
+you to the room (a *traffic correlation* attack). Tor reduces this by keeping long-lived guards
+and not putting relays of the same declared family or /16 network in one circuit, but it cannot
+rule it out against a well-resourced attacker. **This is exactly why Mullvad in front of Tor
+makes sense:** your guard then only sees a Mullvad server, not your IP, and DAITA scrambles the
+timing and size patterns that correlation depends on.
+
+## Maximum OPSEC: run it in a VM
+
+For maximum operational security, run GhostLine inside a **Linux virtual machine (Fedora or
+Kali)** rather than directly on Windows. Even stronger options are Whonix, which routes the whole
+VM through Tor, and Tails.
+
+**Why not Windows?** Windows sends telemetry tied to a persistent device identifier.
+In 2026 the FBI unmasked an alleged Scattered Spider hacker partly through his Windows **Global
+Device Identifier (GDID)**: the same Windows installation was linked across all the VPNs and IPs
+he used, and finally to his home address
+([The Register](https://www.theregister.com/a/5267953), [CyberInsider](https://cyberinsider.com/microsoft-windows-telemetry-identified-hacker-despite-vpn-use/)). Microsoft
+has also confirmed that it hands BitLocker recovery keys stored in Microsoft accounts to
+authorities under a legal order ([Tom's Hardware](https://www.tomshardware.com/tech-industry/cyber-security/microsoft-gave-customers-bitlocker-encryption-keys-to-the-fbi-redmond-confirms-that-it-provides-recovery-keys-to-government-agencies-with-valid-legal-orders)). End-to-end
+encryption cannot protect you from your own operating system. **On Windows, Microsoft's
+telemetry is itself an OPSEC risk.**
+
+VM checklist: Linux guest, full-disk encryption, no shared clipboard or folders with the host,
+Mullvad (lockdown mode + DAITA + multihop) on the host or in the VM, Tor in the VM, and a
+snapshot you can roll back after use.
+
 ## Features
 
 | | |
@@ -196,8 +261,11 @@ A security tool should be upfront about what it **cannot** do:
    burn the room. Thanks to forward secrecy they cannot read past messages.
 5. **Weak passwords can be brute-forced offline** by someone who has the relay's data.
    Argon2id (128 MiB) slows this down a lot, but use the generated passwords.
-6. **Tor does not beat a global observer.** Someone watching both ends can correlate timing.
-   That is why read receipts can be turned off; Mullvad DAITA also helps here.
+6. **Traffic correlation.** If the same party controls your 1st Tor relay and the 3rd one
+   (or the relay's side), or simply watches both ends of the network, it can match timing and
+   sizes and link you to the room. Tor makes this hard but not impossible. Use Mullvad
+   (multihop + DAITA) in front of Tor, and turn off read receipts if needed.
+   See [How it stays private](#how-it-stays-private).
 7. **The relay operator sees** mailbox IDs, padded sizes and arrival times. It does **not** see
    IPs, nicknames, room IDs, passwords or content.
 8. **In countries that block Tor** you will need bridges (or Mullvad in front of Tor).
@@ -208,6 +276,8 @@ A security tool should be upfront about what it **cannot** do:
 11. **Fingerprints are short.** `#1a2b3c` is 24 bits: enough to notice a swap, not enough to
     prove identity.
 12. **Not audited yet.**
+13. **Your operating system can betray you.** Windows telemetry ties activity to a persistent
+    device ID. Run GhostLine in a Linux VM; see [Maximum OPSEC](#maximum-opsec-run-it-in-a-vm).
 
 ## Roadmap
 

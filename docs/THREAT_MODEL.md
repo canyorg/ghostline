@@ -18,6 +18,8 @@ locations (IPs) · nicknames.
 | Malicious room member | everything they receive | ❌ | nicknames | ✅ |
 | Modified client | everything it receives; ignores BURN | ❌ | nicknames | ✅ |
 | Malware on a user's device | ✅ | ✅ | ✅ | ✅ |
+| Operator of your Tor guard **and** the relay side (correlation) | ❌ | ⚠️ timing/size correlation | ⚠️ | ✅ |
+| OS vendor telemetry (e.g. Windows GDID) | ❌ | ✅ device-level | ⚠️ links sessions across VPNs | ✅ |
 
 ## Out of scope
 
@@ -33,5 +35,8 @@ locations (IPs) · nicknames.
 - Message padding buckets against size analysis.
 - Receipts and typing indicators can be switched off to reduce timing leaks.
 - Stream isolation per room and periodic circuit rotation.
+- Recommended deployment: Linux VM (Fedora/Kali, or Whonix/Tails) behind Mullvad
+  (lockdown mode, DAITA, multihop) → Tor. Mullvad hides your IP from the Tor guard and DAITA
+  disturbs timing/size patterns; a Linux guest avoids Windows device-ID telemetry.
 - A Damm check digit, so typos are rejected locally and never reach the relay.
 - Nickname validation that blocks bidi, zero-width and control characters, against impersonation.

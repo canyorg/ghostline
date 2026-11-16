@@ -68,6 +68,68 @@ sen ──► Mullvad (2 atlama, DAITA) ──► Tor (3 atlama) ──► relay
 Bu kombinasyon ideal sistemdir. VPN zorunlu değil, çünkü Tor tek başına IP adresini relay'den
 gizliyor. Mullvad, ISP'ye ve yerel ağa karşı ek bir katman sağlar.
 
+## Gizlilik nasıl sağlanıyor
+
+### Relay neden mesajlarını okuyamaz
+
+Uçtan uca şifreleme, anahtarların **sadece üyelerin cihazlarında** bulunması demektir:
+
+1. Parola bilgisayarından hiç çıkmaz. Argon2id onu senin cihazında oda anahtarına çevirir.
+2. Her üye kendi cihazında yeni gizli anahtarlar üretir. Her üyenin mesaj anahtarları diğer
+   üyelere tek tek, X25519 ile şifrelenerek verilir; oda parolasını bilen biri bile bunları açamaz.
+3. Her mesaj gönderenin cihazında şifrelenir ve sadece alıcıların cihazında çözülür. Arada, yani
+   Tor'da ve relay'de, dolgulu ve rastgele görünen bir veri yığınından ibarettir.
+
+Relay hiçbir zaman parola, anahtar, takma ad ya da oda ID'si görmez. Okunamayan baytları rastgele
+bir posta kutusu adresinde saklar. Kötü niyetli bir relay işletmecisi, sunucuya sızan bir hacker
+ya da sunucuya el koyan polis okunabilir hiçbir şey elde edemez. Kullanılan anahtarlar hemen
+silindiği için, bir cihaz sonradan çalınsa bile eski mesajlar açığa çıkmaz (forward secrecy).
+
+### Tor IP adresini nasıl gizler: birbirini göremeyen 3 relay
+
+```
+sen ──► [1] giriş (guard) ──► [2] orta ──► [3] buluşma ◄── 3 atlama daha ◄── GhostLine relay (.onion)
+        IP'ni bilir,             iki ucu da     ne senin IP'ni
+        hedefi bilmez            bilmez         ne relay'inkini bilir
+```
+
+Trafiğin 3 kat şifreyle sarılır ("soğan"). Her relay sadece bir katı açar ve yalnızca bir önceki ile
+bir sonraki adımı öğrenir:
+
+- **[1] Giriş (guard)** IP adresini görür ama trafiğin nereye gittiğini görmez.
+- **[2] Orta** ne seni ne de hedefi görür.
+- **[3] Son relay** bir sonraki adımı görür ama senin IP'ni görmez.
+
+Hiçbir relay iki ucu birden göremez; IP adresinin sızmamasının sebebi budur. GhostLine relay'i
+de kendi 3 atlamasının arkasında bir onion servisi olarak çalışır. Yani toplam yol 6 atlamadır,
+çıkış (exit) düğümü yoktur ve relay hiçbir IP öğrenmez.
+
+**Risk:** **1. ve 3. relay (ya da senin giriş relay'in ile relay tarafı) aynı kişiye aitse**, bu
+kişi iki uçtaki trafiğin zamanlamasını ve boyutunu eşleştirerek seni odaya bağlayabilir (*trafik
+korelasyonu* saldırısı). Tor bunu, giriş relay'lerini uzun süre sabit tutarak ve aynı aileden ya da
+aynı /16 ağdan relay'leri tek devreye koymayarak azaltır. Ancak güçlü kaynaklara sahip bir saldırgana
+karşı tamamen ortadan kaldıramaz. **Tor'un önüne Mullvad koymanın mantığı tam olarak budur:** giriş
+relay'in senin IP'ni değil, sadece bir Mullvad sunucusunu görür. DAITA da korelasyonun dayandığı
+zamanlama ve boyut desenlerini bozar.
+
+## Maksimum OPSEC: sanal makinede çalıştır
+
+Maksimum operasyonel güvenlik için GhostLine'ı doğrudan Windows üzerinde değil, **Linux sanal
+makinede (Fedora veya Kali)** çalıştır. Daha da güçlü seçenekler: tüm sanal makineyi Tor'dan geçiren
+Whonix ve Tails.
+
+**Neden Windows değil?** Windows, kalıcı bir cihaz kimliğine bağlı telemetri gönderir. 2026'da FBI,
+Scattered Spider üyesi olduğu iddia edilen bir hacker'ı kısmen Windows'un **Global Device Identifier
+(GDID)** kimliği sayesinde buldu: Aynı Windows kurulumu, kullandığı tüm VPN'ler ve IP'ler üzerinden
+izlendi ve sonunda ev adresine bağlandı ([The Register](https://www.theregister.com/a/5267953), [CyberInsider](https://cyberinsider.com/microsoft-windows-telemetry-identified-hacker-despite-vpn-use/)).
+Microsoft ayrıca, Microsoft hesabında saklanan BitLocker kurtarma anahtarlarını yasal bir kararla
+yetkililere verdiğini doğruladı ([Tom's Hardware](https://www.tomshardware.com/tech-industry/cyber-security/microsoft-gave-customers-bitlocker-encryption-keys-to-the-fbi-redmond-confirms-that-it-provides-recovery-keys-to-government-agencies-with-valid-legal-orders)). Uçtan uca şifreleme seni kendi işletim
+sisteminden koruyamaz. **Windows'ta Microsoft'un telemetrisi başlı başına bir OPSEC riskidir.**
+
+Sanal makine kontrol listesi: Linux misafir sistem, tam disk şifreleme, ana makineyle ortak pano
+ya da klasör yok, ana makinede veya sanal makinede Mullvad (lockdown mode + DAITA + multihop),
+sanal makinede Tor ve kullanımdan sonra geri dönebileceğin bir snapshot.
+
 ## Özellikler
 
 | | |
@@ -196,8 +258,10 @@ Bir güvenlik aracı neyi **yapamadığını** açıkça söylemeli:
    yakabilir. Forward secrecy sayesinde geçmiş mesajları okuyamaz.
 5. **Zayıf parolalar çevrimdışı kırılabilir.** Bunun için relay verisine erişim gerekir.
    Argon2id (128 MiB) bunu ciddi şekilde yavaşlatır, yine de üretilen parolaları kullan.
-6. **Tor, küresel bir gözlemciye karşı yetmez.** Ağın iki ucunu birden izleyen biri zamanlamayı
-   eşleştirebilir. Bu yüzden okundu bilgisi kapatılabiliyor; Mullvad DAITA da burada yardımcı olur.
+6. **Trafik korelasyonu.** Senin 1. Tor relay'in ile 3. relay (ya da relay tarafı) aynı kişinin
+   elindeyse, ya da biri ağın iki ucunu birden izliyorsa, zamanlamayı ve boyutları eşleştirerek seni
+   odaya bağlayabilir. Tor bunu zorlaştırır ama imkansız kılmaz. Tor'un önüne Mullvad koy (multihop +
+   DAITA) ve gerekirse okundu bilgisini kapat. [Gizlilik nasıl sağlanıyor](#gizlilik-nasıl-sağlanıyor) bölümüne bak.
 7. **Relay işletmecisi şunları görür:** posta kutusu ID'leri, dolgulu boyutlar ve verinin geliş
    zamanları. IP, takma ad, oda ID'si, parola ve içerik **görmez**.
 8. **Tor'un engellendiği ülkelerde** köprü (bridge) kullanman ya da Tor'un önüne Mullvad koyman gerekir.
@@ -208,6 +272,8 @@ Bir güvenlik aracı neyi **yapamadığını** açıkça söylemeli:
 11. **Parmak izleri kısa.** `#1a2b3c` 24 bit: birinin yerine başkasının geçtiğini fark etmeye
     yeter, kimliği kanıtlamaya yetmez.
 12. **Henüz denetlenmedi.**
+13. **İşletim sistemin seni ele verebilir.** Windows telemetrisi yaptıklarını kalıcı bir cihaz
+    kimliğine bağlar. GhostLine'ı Linux sanal makinede çalıştır, [Maksimum OPSEC](#maksimum-opsec-sanal-makinede-çalıştır) bölümüne bak.
 
 ## Yol haritası
 
