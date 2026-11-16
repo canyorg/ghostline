@@ -1,17 +1,12 @@
 <p align="center"><b>English</b> · <a href="README.tr.md">Türkçe</a> · <a href="README.ru.md">Русский</a></p>
 
-```
- ██████╗ ██╗  ██╗ ██████╗ ███████╗████████╗██╗     ██╗███╗   ██╗███████╗
-██╔════╝ ██║  ██║██╔═══██╗██╔════╝╚══██╔══╝██║     ██║████╗  ██║██╔════╝
-██║  ███╗███████║██║   ██║███████╗   ██║   ██║     ██║██╔██╗ ██║█████╗
-██║   ██║██╔══██║██║   ██║╚════██║   ██║   ██║     ██║██║╚██╗██║██╔══╝
-╚██████╔╝██║  ██║╚██████╔╝███████║   ██║   ███████╗██║██║ ╚████║███████╗
- ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝
-```
+<p align="center"><img src="docs/img/hero.png" alt="GhostLine — start screen" width="820"></p>
 
 # GhostLine
 
 **Military-grade anonymous chat — Signal Protocol + Tor onion transport, zero metadata.**
+
+<p align="center"><b><a href="https://github.com/canyorg/ghostline/releases/tag/latest">⬇ Download (Windows / Linux)</a></b> · <b><a href="#user-guide-step-by-step">📖 User guide</a></b></p>
 
 No accounts. No phone numbers. No e-mail. No IP addresses. No user agents. No logs.
 You get a room number and a password, you pick a nickname, you talk, you burn the room.
@@ -67,6 +62,142 @@ you ──► Mullvad (2 hops, DAITA) ──► Tor (3 hops) ──► relay.oni
 
 This combination is the ideal setup. The VPN is not required, since Tor alone already hides
 your IP from the relay. Mullvad adds a layer against your ISP and local network.
+
+## User guide (step by step)
+
+> **Short version:** download the app → paste the relay's `.onion` address → wait for
+> "Tor ready" → **CREATE CHAT** or **JOIN ROOM**. Details below.
+
+### 1. Download and install
+
+You do **not** need to install Rust, Git, Tor Browser or anything else: the app is a single
+file with Tor built in. The newest build is always here (no GitHub account needed):
+**[Releases → latest](https://github.com/canyorg/ghostline/releases/tag/latest)**
+
+#### Windows 10 / 11
+
+1. Download **[ghostline-gui-x86_64-pc-windows-msvc.exe](https://github.com/canyorg/ghostline/releases/download/latest/ghostline-gui-x86_64-pc-windows-msvc.exe)**.
+2. If your browser asks whether to keep the file, choose **Keep**.
+3. *(Optional, recommended)* Check that the file was not tampered with. Open PowerShell
+   in your Downloads folder and run
+   `Get-FileHash .\ghostline-gui-x86_64-pc-windows-msvc.exe -Algorithm SHA256`, then
+   compare the result with `SHA256SUMS-x86_64-pc-windows-msvc.txt` on the release page.
+4. Double-click the `.exe`. The file is not code-signed, so Windows may show
+   *"Windows protected your PC"*. Click **More info → Run anyway**.
+5. There is no installer. Keep the `.exe` wherever you like, for example on the desktop.
+
+#### Linux (Fedora, Ubuntu, Debian, Kali, Arch…)
+
+```bash
+cd ~/Downloads
+wget https://github.com/canyorg/ghostline/releases/download/latest/ghostline-gui-x86_64-unknown-linux-gnu
+sha256sum ghostline-gui-x86_64-unknown-linux-gnu   # compare with SHA256SUMS-x86_64-unknown-linux-gnu.txt
+chmod +x ghostline-gui-x86_64-unknown-linux-gnu
+./ghostline-gui-x86_64-unknown-linux-gnu
+```
+
+The terminal client (`ghostline-x86_64-…`) and the relay (`ghostline-relay-x86_64-…`)
+are on the same page. To build from source instead, see
+[Build from source](#build-from-source-developers).
+
+### 2. What is the relay, and which address do I type?
+
+A **relay** is a small mailbox server that passes the **encrypted** messages between the
+members of a room. It cannot read anything (see [How it stays private](#how-it-stays-private)).
+Everyone in a room must use **the same relay**. One person, or a server, runs it.
+
+The relay is reached through a Tor **onion address** like `abcd…xyz.onion`. What you type
+into the **Relay** field depends on which computer you are on:
+
+| You are on… | Type into **Relay** | Why |
+|---|---|---|
+| **any other computer** (your friend, your laptop, another network) | `http://abcd…xyz.onion` | Tor carries you to the relay; no IP is ever revealed. **No port number.** |
+| **the computer that runs the relay itself** | `http://127.0.0.1:7878` (the default; leave it) | The relay only listens inside that computer. Tor forwards the `.onion` address to exactly this port. |
+
+Rules that save you time:
+
+- **Start with `http://`**, not `https://`. Tor already encrypts and authenticates
+  `.onion` connections. If you forget `http://`, the app adds it for you.
+- **No port after `.onion`.** Port `:7878` is only used on the relay computer itself.
+- **Copy and paste** the address. One wrong letter means a different (non-existent) address.
+- **Do not change the relay's listen address.** It must stay on `127.0.0.1:7878`, so it is
+  reachable **only through Tor**. Opening it to the network (`0.0.0.0`) would let people
+  connect without Tor, and the relay would see their IPs.
+
+### 3. Run your own relay (one-time setup, Linux)
+
+Do this on a computer or server that stays **on and online** while you chat; a cheap VPS
+works well. The relay keeps rooms **only in RAM**, so if it stops, all rooms are gone.
+
+```bash
+# 1) download the relay
+wget https://github.com/canyorg/ghostline/releases/download/latest/ghostline-relay-x86_64-unknown-linux-gnu
+chmod +x ghostline-relay-x86_64-unknown-linux-gnu
+
+# 2) install Tor and publish the relay as an onion service — ONLY ONCE
+sudo dnf install -y tor                 # Debian/Ubuntu/Kali: sudo apt install -y tor
+echo -e "HiddenServiceDir /var/lib/tor/ghostline/\nHiddenServicePort 80 127.0.0.1:7878" | sudo tee -a /etc/tor/torrc
+sudo systemctl enable --now tor
+sudo systemctl restart tor
+
+# 3) your relay address (share this with your contacts)
+sleep 15; sudo cat /var/lib/tor/ghostline/hostname
+
+# 4) start the relay — keep this terminal open
+./ghostline-relay-x86_64-unknown-linux-gnu
+```
+
+- Run step 2 **only once**. Adding the same lines to `torrc` twice can stop Tor from starting.
+- The `.onion` address stays the same across restarts. It is stored in `/var/lib/tor/ghostline/`;
+  keep that folder if you want to keep the address.
+- No port forwarding and no static IP are needed. Onion services work behind any home router.
+- Check that Tor runs: `systemctl is-active tor` should print `active`.
+
+### 4. Create a room
+
+1. Open the app. Under **Network → Relay**, paste the relay address (see the table above).
+2. Leave **Built-in Tor (recommended)** selected. Wait until the progress bar finishes and
+   **"Tor ready"** appears. The first start takes 10–60 s.
+3. Click **CREATE CHAT**.
+4. Enter a **nickname**.
+5. **Password:** keep **Generate automatically** (strongest; **Suggest password** gives a new
+   one), or choose **Set my own** (at least 12 characters, entered twice).
+6. Click **Create room**. You get the **Room ID** and the **password**, each with a **Copy** button.
+7. Send both to the other person over a channel you trust (in person is best). They never change.
+8. Click **Enter room**.
+
+### 5. Join a room
+
+1. Open the app and set the same **Relay** address.
+2. Click **JOIN ROOM**.
+3. **Room ID:** type or paste it. Spaces don't matter. A typo is caught at once
+   (*"check digit is wrong"*).
+4. **Password:** paste it. Tick **show** to compare it character by character.
+5. Enter a **nickname** and click **Join**. Over Tor the first connection can take 10–30 s.
+
+### 6. In the room
+
+- **Send:** type and press **Enter** (**Shift+Enter** for a new line).
+- **Ticks:** ⏳ sending · ✔ on the relay · ✔✔ delivered to everyone · **cyan ✔✔** read by everyone.
+- **Fingerprint:** `Acid Burn#afdb04`. The `#code` belongs to that person's key. If it suddenly
+  changes, it is a different device or person.
+- **Members** shows who is in the room. **Room info** shows the ID and password again.
+- **Leave:** you leave; the others get new keys, so you can't read anything sent later.
+- **🔥 BURN ROOM:** hold the button for **1.5 s**. The room is deleted from the relay at once,
+  everyone's keys are wiped, and the room can never be opened again.
+- New members cannot read messages sent before they joined. That is intended.
+
+### 7. Troubleshooting
+
+| Message | What it means / what to do |
+|---|---|
+| *room not found — or wrong password* | The relay answered, so Tor works. The ID or **password** is wrong (one character is enough), or the relay was restarted (rooms live in RAM). Copy-paste the password, or create a new room. |
+| *no relay is running on this computer (127.0.0.1)* | You left the default address. On every computer except the relay itself, enter the relay's `http://….onion` address. |
+| *invalid relay URL* | Check the address. It should look like `http://abcd…xyz.onion`. |
+| Tor stays at a low % | No internet, or Tor is blocked on this network. Connect through Mullvad first, or try another network. |
+| *could not reach the relay through Tor* | The relay computer is off, the relay program isn't running, or Tor isn't running there (`systemctl is-active tor`). |
+| *this room has been burned* | Someone burned it. Create a new room. |
+| "Windows protected your PC" | The `.exe` is not code-signed: **More info → Run anyway**. Check the SHA-256 first. |
 
 ## How it stays private
 
@@ -149,7 +280,7 @@ snapshot you can roll back after use.
 | 🟩 **Hacker UI** | **Desktop app** (Linux + Windows) with matrix rain, chat bubbles and hold-to-burn, in English, Turkish and Russian. Plus a green-on-black **terminal client**. Both talk to each other. |
 | 🧱 **No web engine** | The desktop app is pure Rust (egui): no WebView, no JavaScript, no HTML. Message text is only ever drawn as plain text. No messages, settings or history are written to disk; only Tor's guard/directory state is kept, like Tor Browser (`GHOSTLINE_AMNESIC=1` = nothing at all). |
 
-## Quick start
+## Build from source (developers)
 
 You need [Rust](https://rustup.rs). It works on Linux (Fedora, Debian, Arch…), Windows 10/11
 (PowerShell, Windows Terminal) and macOS.

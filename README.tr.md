@@ -1,17 +1,12 @@
 <p align="center"><a href="README.md">English</a> · <b>Türkçe</b> · <a href="README.ru.md">Русский</a></p>
 
-```
- ██████╗ ██╗  ██╗ ██████╗ ███████╗████████╗██╗     ██╗███╗   ██╗███████╗
-██╔════╝ ██║  ██║██╔═══██╗██╔════╝╚══██╔══╝██║     ██║████╗  ██║██╔════╝
-██║  ███╗███████║██║   ██║███████╗   ██║   ██║     ██║██╔██╗ ██║█████╗
-██║   ██║██╔══██║██║   ██║╚════██║   ██║   ██║     ██║██║╚██╗██║██╔══╝
-╚██████╔╝██║  ██║╚██████╔╝███████║   ██║   ███████╗██║██║ ╚████║███████╗
- ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝
-```
+<p align="center"><img src="docs/img/hero.png" alt="GhostLine — başlangıç ekranı" width="820"></p>
 
 # GhostLine
 
 **Askeri seviye anonim sohbet: Signal Protocol + Tor onion taşıma, sıfır metadata.**
+
+<p align="center"><b><a href="https://github.com/canyorg/ghostline/releases/tag/latest">⬇ İndir (Windows / Linux)</a></b> · <b><a href="#kullanım-kılavuzu-adım-adım">📖 Kullanım kılavuzu</a></b></p>
 
 Hesap yok. Telefon numarası yok. E-posta yok. IP adresi yok. User agent yok. Log yok.
 Bir oda numarası ve parola alırsın, takma adını seçersin, konuşursun, işin bitince odayı yakarsın.
@@ -67,6 +62,142 @@ sen ──► Mullvad (2 atlama, DAITA) ──► Tor (3 atlama) ──► relay
 
 Bu kombinasyon ideal sistemdir. VPN zorunlu değil, çünkü Tor tek başına IP adresini relay'den
 gizliyor. Mullvad, ISP'ye ve yerel ağa karşı ek bir katman sağlar.
+
+## Kullanım kılavuzu (adım adım)
+
+> **Kısaca:** uygulamayı indir → relay'in `.onion` adresini yapıştır → "Tor hazır" yazısını
+> bekle → **CHAT OLUŞTUR** ya da **ODAYA KATIL**. Ayrıntılar aşağıda.
+
+### 1. İndirme ve kurulum
+
+Rust, Git, Tor Browser ya da başka bir şey kurman **gerekmez**: uygulama tek bir dosyadır ve
+Tor içindedir. En güncel sürüm her zaman burada (GitHub hesabı gerekmez):
+**[Releases → latest](https://github.com/canyorg/ghostline/releases/tag/latest)**
+
+#### Windows 10 / 11
+
+1. **[ghostline-gui-x86_64-pc-windows-msvc.exe](https://github.com/canyorg/ghostline/releases/download/latest/ghostline-gui-x86_64-pc-windows-msvc.exe)** dosyasını indir.
+2. Tarayıcı dosyayı tutmak isteyip istemediğini sorarsa **Koru / Keep** de.
+3. *(İsteğe bağlı, önerilir)* Dosyanın değiştirilmediğini kontrol et. İndirilenler klasöründe
+   PowerShell aç ve `Get-FileHash .\ghostline-gui-x86_64-pc-windows-msvc.exe -Algorithm SHA256`
+   komutunu çalıştır. Çıkan değeri sürüm sayfasındaki `SHA256SUMS-x86_64-pc-windows-msvc.txt`
+   ile karşılaştır.
+4. `.exe` dosyasına çift tıkla. Dosya imzalı olmadığı için Windows *"Windows bilgisayarınızı
+   korudu"* diyebilir: **Ek bilgi → Yine de çalıştır** de.
+5. Kurulum yok. `.exe` dosyasını istediğin yerde tutabilirsin, örneğin masaüstünde.
+
+#### Linux (Fedora, Ubuntu, Debian, Kali, Arch…)
+
+```bash
+cd ~/İndirilenler        # İngilizce sistemde: cd ~/Downloads
+wget https://github.com/canyorg/ghostline/releases/download/latest/ghostline-gui-x86_64-unknown-linux-gnu
+sha256sum ghostline-gui-x86_64-unknown-linux-gnu   # SHA256SUMS-x86_64-unknown-linux-gnu.txt ile karşılaştır
+chmod +x ghostline-gui-x86_64-unknown-linux-gnu
+./ghostline-gui-x86_64-unknown-linux-gnu
+```
+
+Terminal istemcisi (`ghostline-x86_64-…`) ve relay (`ghostline-relay-x86_64-…`) aynı
+sayfada. Kaynak koddan derlemek için [Kaynak koddan derleme](#kaynak-koddan-derleme-geliştiriciler)
+bölümüne bak.
+
+### 2. Relay nedir, adres alanına ne yazmalıyım?
+
+**Relay**, odadaki üyeler arasında **şifreli** mesajları taşıyan küçük bir posta kutusu
+sunucusudur. Hiçbir şeyi okuyamaz ([Gizlilik nasıl sağlanıyor](#gizlilik-nasıl-sağlanıyor)).
+Bir odadaki herkes **aynı relay'i** kullanmalıdır. Relay'i bir kişi ya da bir sunucu çalıştırır.
+
+Relay'e `abcd…xyz.onion` gibi bir Tor **onion adresi** üzerinden ulaşılır. **Relay** alanına ne
+yazacağın hangi bilgisayarda olduğuna bağlıdır:
+
+| Şu an hangi bilgisayardasın? | **Relay** alanına yaz | Neden |
+|---|---|---|
+| **diğer tüm bilgisayarlar** (arkadaşın, laptopun, başka bir ağ) | `http://abcd…xyz.onion` | Tor seni relay'e taşır, hiçbir IP görünmez. **Port yazılmaz.** |
+| **relay'in çalıştığı bilgisayarın kendisi** | `http://127.0.0.1:7878` (varsayılan, dokunma) | Relay sadece o bilgisayarın içinden dinler. Tor, `.onion` adresine gelenleri tam olarak bu porta yönlendirir. |
+
+Vakit kazandıran kurallar:
+
+- **`http://` ile başla**, `https://` değil. Tor, `.onion` bağlantılarını zaten şifreler ve
+  doğrular. `http://` yazmayı unutursan uygulama kendisi ekler.
+- **`.onion`'dan sonra port yazma.** `:7878` sadece relay bilgisayarının kendisinde kullanılır.
+- **Adresi kopyala-yapıştır yap.** Tek harf hatası, başka (var olmayan) bir adres demektir.
+- **Relay'in dinlediği adresi değiştirme.** `127.0.0.1:7878`'de kalmalı, böylece relay'e
+  **sadece Tor üzerinden** ulaşılabilir. Ağa açarsan (`0.0.0.0`) insanlar Tor'suz bağlanabilir
+  ve relay onların IP'sini görür.
+
+### 3. Kendi relay'ini kur (bir kerelik kurulum, Linux)
+
+Bunu sohbet ederken **açık ve internete bağlı** kalacak bir bilgisayarda ya da sunucuda yap;
+ucuz bir VPS gayet iyi olur. Relay odaları **sadece RAM'de** tutar: relay durursa tüm odalar silinir.
+
+```bash
+# 1) relay'i indir
+wget https://github.com/canyorg/ghostline/releases/download/latest/ghostline-relay-x86_64-unknown-linux-gnu
+chmod +x ghostline-relay-x86_64-unknown-linux-gnu
+
+# 2) Tor'u kur ve relay'i onion servisi olarak yayınla — SADECE BİR KERE
+sudo dnf install -y tor                 # Debian/Ubuntu/Kali: sudo apt install -y tor
+echo -e "HiddenServiceDir /var/lib/tor/ghostline/\nHiddenServicePort 80 127.0.0.1:7878" | sudo tee -a /etc/tor/torrc
+sudo systemctl enable --now tor
+sudo systemctl restart tor
+
+# 3) relay adresin (bunu kişilerinle paylaş)
+sleep 15; sudo cat /var/lib/tor/ghostline/hostname
+
+# 4) relay'i başlat — bu terminali açık bırak
+./ghostline-relay-x86_64-unknown-linux-gnu
+```
+
+- 2. adımı **sadece bir kere** çalıştır. Aynı satırları `torrc`'ye iki kez eklemek Tor'un başlamasını engelleyebilir.
+- `.onion` adresi yeniden başlatmalarda değişmez. Adres `/var/lib/tor/ghostline/` klasöründe
+  saklanır; adresi korumak istiyorsan bu klasörü silme.
+- Modemde port açmana ya da sabit IP'ye gerek yok. Onion servisleri her ev modeminin arkasında çalışır.
+- Tor'un çalıştığını kontrol et: `systemctl is-active tor` komutu `active` yazmalı.
+
+### 4. Oda oluştur
+
+1. Uygulamayı aç. **Ağ → Relay** alanına relay adresini yapıştır (yukarıdaki tabloya bak).
+2. **Yerleşik Tor (önerilen)** seçili kalsın. İlerleme çubuğu dolup **"Tor hazır"** yazana kadar
+   bekle. İlk açılış 10–60 saniye sürer.
+3. **CHAT OLUŞTUR**'a tıkla.
+4. Bir **takma ad** gir.
+5. **Parola:** **Otomatik oluştur** seçili kalsın (en güçlüsü; **Şifre öner** yenisini verir) ya da
+   **Kendim belirleyeceğim** seç (en az 12 karakter, iki kez).
+6. **Odayı oluştur**'a tıkla. **Oda ID** ve **parola**, **Kopyala** butonlarıyla birlikte gösterilir.
+7. İkisini de karşı tarafa güvendiğin bir kanaldan gönder (en iyisi yüz yüze). Hiç değişmezler.
+8. **Odaya gir**'e tıkla.
+
+### 5. Odaya katıl
+
+1. Uygulamayı aç ve aynı **Relay** adresini gir.
+2. **ODAYA KATIL**'a tıkla.
+3. **Oda ID:** yaz ya da yapıştır. Boşluklar önemli değil. Yazım hatası anında yakalanır
+   (*"kontrol hanesi yanlış"*).
+4. **Parola:** yapıştır. Karakter karakter karşılaştırmak için **göster** kutusunu işaretle.
+5. **Takma ad** gir ve **Katıl**'a tıkla. Tor üzerinden ilk bağlantı 10–30 saniye sürebilir.
+
+### 6. Oda içinde
+
+- **Gönder:** yaz ve **Enter**'a bas (**Shift+Enter** yeni satır).
+- **İşaretler:** ⏳ gönderiliyor · ✔ relay'de · ✔✔ herkese ulaştı · **cyan ✔✔** herkes okudu.
+- **Parmak izi:** `Acid Burn#afdb04`. `#kod` o kişinin anahtarına aittir. Birden değişirse
+  karşındaki başka bir cihaz ya da başka bir kişidir.
+- **Üyeler** odada kimlerin olduğunu, **Oda bilgisi** ID'yi ve parolayı tekrar gösterir.
+- **Çık:** odadan çıkarsın; diğerleri yeni anahtar alır, sonrasını okuyamazsın.
+- **🔥 ODAYI SİL:** butonu **1,5 saniye** basılı tut. Oda relay'den anında silinir, herkesin
+  anahtarları temizlenir ve oda bir daha asla açılamaz.
+- Yeni katılanlar, katılmadan önce gönderilen mesajları okuyamaz. Bu bilerek böyle.
+
+### 7. Sorun giderme
+
+| Mesaj | Anlamı / ne yapmalı |
+|---|---|
+| *room not found — or wrong password* (oda bulunamadı ya da parola yanlış) | Relay cevap verdi, yani Tor çalışıyor. ID ya da **parola** yanlış (tek karakter yeter) veya relay yeniden başlatılmış (odalar RAM'de durur). Parolayı kopyala-yapıştır yap ya da yeni oda oluştur. |
+| *no relay is running on this computer (127.0.0.1)* (bu bilgisayarda relay yok) | Varsayılan adres kalmış. Relay bilgisayarı dışındaki her bilgisayarda relay'in `http://….onion` adresini gir. |
+| *invalid relay URL* (geçersiz relay adresi) | Adresi kontrol et, `http://abcd…xyz.onion` şeklinde olmalı. |
+| Tor düşük bir yüzdede kalıyor | İnternet yok ya da bu ağda Tor engelli. Önce Mullvad'a bağlan ya da başka bir ağ dene. |
+| *could not reach the relay through Tor* (relay'e Tor üzerinden ulaşılamadı) | Relay bilgisayarı kapalı, relay programı çalışmıyor ya da orada Tor çalışmıyor (`systemctl is-active tor`). |
+| *this room has been burned* (oda silinmiş) | Biri odayı silmiş. Yeni oda oluştur. |
+| "Windows bilgisayarınızı korudu" | `.exe` imzalı değil: **Ek bilgi → Yine de çalıştır**. Önce SHA-256'yı kontrol et. |
 
 ## Gizlilik nasıl sağlanıyor
 
@@ -146,7 +277,7 @@ sanal makinede Tor ve kullanımdan sonra geri dönebileceğin bir snapshot.
 | 🟩 **Hacker arayüzü** | Matrix yağmurlu, mesaj balonlu, basılı tutunca silen **masaüstü uygulaması** (Linux + Windows). Türkçe, İngilizce ve Rusça. Yanında siyah üzerine yeşil **terminal istemcisi** de var ve ikisi birbiriyle konuşabiliyor. |
 | 🧱 **Web motoru yok** | Masaüstü uygulaması saf Rust (egui): WebView, JavaScript ve HTML yok. Mesajlar her zaman düz metin olarak çizilir. Diske mesaj, ayar veya geçmiş yazılmaz; Tor Browser'daki gibi sadece Tor'un guard/dizin bilgisi tutulur (`GHOSTLINE_AMNESIC=1` ile hiçbir şey). |
 
-## Hızlı başlangıç
+## Kaynak koddan derleme (geliştiriciler)
 
 [Rust](https://rustup.rs) gerekir. Linux'ta (Fedora, Debian, Arch…), Windows 10/11'de
 (PowerShell, Windows Terminal) ve macOS'te çalışır.
