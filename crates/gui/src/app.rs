@@ -252,7 +252,7 @@ impl GhostApp {
             TorChoice::Off => TorMode::Off,
         };
         NetConfig {
-            relay: self.relay.trim().to_string(),
+            relay: ghostline_client::net::normalize_relay(&self.relay),
             tor,
             allow_direct: self.allow_direct && self.tor_choice == TorChoice::Off,
             embedded: self.tor.lock().unwrap().ready.clone(),
@@ -311,7 +311,7 @@ impl GhostApp {
         ui.horizontal_wrapped(|ui| {
             if ready {
                 ui.label(
-                    RichText::new(format!("🧅 {} · {}", t.tor_ready, t.tor_builtin))
+                    RichText::new(format!("✔ {} · {}", t.tor_ready, t.tor_builtin))
                         .small()
                         .color(GREEN),
                 );

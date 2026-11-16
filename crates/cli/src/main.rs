@@ -131,7 +131,7 @@ impl NetArgs {
             TorMode::Embedded
         };
         NetConfig {
-            relay: self.relay.clone(),
+            relay: ghostline_client::net::normalize_relay(&self.relay),
             tor,
             allow_direct: self.no_tor,
             embedded: None,

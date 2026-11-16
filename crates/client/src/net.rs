@@ -314,6 +314,17 @@ fn explain_reqwest(e: reqwest::Error) -> anyhow::Error {
     }
 }
 
+/// Accept `abcd….onion`, `abcd….onion:80`, `127.0.0.1:7878` etc. without a scheme:
+/// trims whitespace and a trailing slash, and adds `http://` if missing.
+pub fn normalize_relay(input: &str) -> String {
+    let s = input.trim().trim_end_matches('/');
+    if s.is_empty() || s.contains("://") {
+        s.to_string()
+    } else {
+        format!("http://{s}")
+    }
+}
+
 /// Is `relay_url` on this computer?
 pub fn is_loopback(relay_url: &str) -> bool {
     url::Url::parse(relay_url)
